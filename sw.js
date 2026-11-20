@@ -1,6 +1,6 @@
 /* Service worker · Fiscalização de Obras
  * Ao publicar uma versão nova do app, troque o número abaixo para os celulares atualizarem. */
-const VERSAO = 'v2';
+const VERSAO = 'v3';
 const APP = 'fisc-app-' + VERSAO;
 const IMGS = 'fisc-imgs';
 const ARQUIVOS = ['./', 'index.html', 'app.js', 'config.js', 'prmap.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
@@ -25,11 +25,15 @@ self.addEventListener('fetch', e => {
     }));
     return;
   }
-  // arquivos do app e bibliotecas: usa o guardado e atualiza por trás
+  // arquivos do app: sempre tenta a versão mais nova; sem sinal, usa a guardada
   e.respondWith(caches.open(APP).then(async c => {
-    const hit = await c.match(req, { ignoreSearch: u.origin === location.origin });
-    const rede = fetch(req).then(r => { if (r && (r.ok || r.type === 'opaque')) c.put(req, r.clone()); return r }).catch(() => null);
-    if (hit) { e.waitUntil(rede); return hit }
-    const r = await rede; return r || (req.mode === 'navigate' ? c.match('index.html') : Response.error());
+    try {
+      const r = await fetch(req, { cache: 'no-cache' });
+      if (r && (r.ok || r.type === 'opaque')) c.put(req, r.clone());
+      return r;
+    } catch (err) {
+      const hit = await c.match(req, { ignoreSearch: u.origin === location.origin });
+      return hit || (req.mode === 'navigate' ? c.match('index.html') : Response.error());
+    }
   }));
 });
