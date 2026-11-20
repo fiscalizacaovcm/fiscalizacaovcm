@@ -1,7 +1,7 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.3.0';
+const VERSAO_APP = '1.3.1';
 const LIB = {
   pdf: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   pdfw: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
@@ -839,10 +839,34 @@ function vFobra(app) {
   VIEWER.obraId = o.id;
   $('#novo').onclick = () => { VIEWER.setPlacing(!VIEWER.placing, 'Toque na planta onde ficou o poste novo') };
   updFbot();
+  const rasc = lsGet('fisc.rascunho', null);
+  if (rasc && rasc.obra === o.id && Date.now() - rasc.t < 20 * 60000) setTimeout(() => abrirPoste(o, rasc.key, rasc.novoPos, rasc), 300);
 }
 function updFbot() {
   const o = S.obras.find(x => x.id === S.obraId); const el = $('#fsum'); if (!o || !el) return; const I = S.idx[o.id];
   el.innerHTML = `<b>${I.exec}/${I.tot}</b> postes · <b style="color:var(--or)">${fmt1(I.pct * 100)}%</b>${I.pend ? ` · <span class="small muted">${I.pend} a enviar</span>` : ''}<div class="bar" style="margin-top:4px"><i class="b-ok" style="width:${I.ok / (I.tot || 1) * 100}%"></i><i class="b-alt" style="width:${I.alt / (I.tot || 1) * 100}%"></i><i class="b-bad" style="width:${I.bad / (I.tot || 1) * 100}%"></i></div>`
+}
+
+/* ---------- câmera dentro do app ---------- */
+function cameraInterna() {
+  return new Promise(async (ok, ko) => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return ko(new Error('sem câmera'));
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } }, audio: false }) }
+    catch (e) { return ko(e) }
+    const ov = document.createElement('div'); ov.className = 'camov';
+    ov.innerHTML = `<video playsinline autoplay muted></video><div class="cambar"><button class="btn ghost" data-c="x">Cancelar</button><button class="shutter" data-c="ok" aria-label="Tirar foto"></button><span style="width:86px"></span></div>`;
+    document.body.appendChild(ov);
+    const v = ov.querySelector('video'); v.srcObject = stream;
+    const fim = r => { stream.getTracks().forEach(t => t.stop()); ov.remove(); ok(r) };
+    ov.querySelector('[data-c=x]').onclick = () => fim(null);
+    ov.querySelector('[data-c=ok]').onclick = () => {
+      const w = v.videoWidth, h = v.videoHeight; if (!w) return;
+      const s = Math.min(1, 1280 / Math.max(w, h)); const cv = document.createElement('canvas'); cv.width = Math.round(w * s); cv.height = Math.round(h * s);
+      cv.getContext('2d').drawImage(v, 0, 0, cv.width, cv.height);
+      cv.toBlob(b => fim({ blob: b, gps: null, data: null }), 'image/jpeg', .78);
+    };
+  });
 }
 
 /* ---------- GPS do celular ---------- */
@@ -855,12 +879,16 @@ function pegarGps() {
   });
 }
 
-function abrirPoste(o, key, novoPos) {
+function abrirPoste(o, key, novoPos, rasc) {
   const novo = !key;
   const I = S.idx[o.id]; const st = key ? I.postes.get(key) : null;
   const pp = key && key.startsWith('P') ? (o.postes.find(p => 'P' + p.n === key) || {}) : {};
   const prev = pp.nota || ''; const ret = pp.acao === 'retirar';
   const F = { tipo: novo ? 'novo' : null, alt: [], obs: '', foto: null, dataExec: hoje(), gps: null };
+  if (rasc) { F.tipo = rasc.tipo || F.tipo; F.alt = rasc.alt || []; F.obs = rasc.obs || ''; F.dataExec = rasc.dataExec || F.dataExec }
+  // rascunho: se o Android fechar o app enquanto a câmera do celular está aberta, o registro volta preenchido
+  const guardar = () => lsSet('fisc.rascunho', { obra: o.id, key: key || null, novoPos: novoPos || null, tipo: F.tipo, alt: F.alt, obs: F.obs, dataExec: F.dataExec, t: Date.now() });
+  const descartar = () => { try { localStorage.removeItem('fisc.rascunho') } catch (e) { } };
   const gpsP = pegarGps().then(g => { F.gps = g; const el = $('#fgps2'); if (el) el.textContent = g ? `GPS do celular: ${g.lat.toFixed(5)}, ${g.lon.toFixed(5)} (±${g.precisao} m)` : 'GPS do celular indisponível. Ative a localização para este app.' });
   const titulo = novo ? 'Poste não previsto' : rotuloPoste(o, key);
   openLayer(`<div class="ov" id="shov" style="align-items:flex-end;padding:0"><div class="sheet" style="position:relative;width:100%"><div class="grab"></div>
@@ -872,12 +900,14 @@ function abrirPoste(o, key, novoPos) {
     <div id="dyn"></div>
     <label class="f">Data da execução</label><input class="i" type="date" id="dex" value="${F.dataExec}" max="${hoje()}">
     <label class="f">Foto do poste <span id="fobr"></span></label>
-    <div class="photo"><img id="fprev" class="hidden"><label><input type="file" accept="image/*" capture="environment" id="ffoto" class="hidden">📷 <span id="flbl">Tirar foto</span></label></div>
+    ${rasc ? `<div class="note" style="margin-top:6px">O registro foi retomado. Tire a foto de novo.</div>` : ''}
+    <div class="photo"><img id="fprev" class="hidden"><button type="button" class="fbtn" id="fcam">📷 <span id="flbl">Tirar foto</span></button><label class="fbtn gal"><input type="file" accept="image/*" id="fgal" class="hidden">🖼️ Galeria</label><input type="file" accept="image/*" capture="environment" id="ffoto" class="hidden"></div>
     <div class="small muted" id="fgps2" style="margin-top:6px">Buscando GPS do celular…</div>
     <button class="btn pri" id="shok" style="width:100%;margin-top:16px;padding:14px;font-size:15px" disabled>Salvar registro</button>
     ${st && st.hist.length ? `<div class="hist"><b class="small">Histórico</b>${[...st.hist].reverse().map(r => `<div>${dtBR(r.em)} · ${esc(tipoTx(o, r))} · ${esc(r.equipe || '')}${r.alt && r.alt.length ? ' · ' + esc(r.alt.join(', ')) : ''}</div>`).join('')}</div>` : ''}
   </div></div>`);
-  $('#shx').onclick = closeLayer; $('#shov').onclick = e => { if (e.target.id === 'shov') closeLayer() };
+  const fechar = () => { descartar(); closeLayer() };
+  $('#shx').onclick = fechar; $('#shov').onclick = e => { if (e.target.id === 'shov') fechar() };
   const dyn = $('#dyn'); const LY = $('#layer');
   const precisaFoto = () => F.tipo !== 'nao';
   const valida = () => { const ok = F.tipo && (!precisaFoto() || F.foto) && (F.tipo !== 'alterado' || F.alt.length) && (F.tipo !== 'nao' || F.alt.length) && (F.tipo !== 'novo' || F.obs.trim()); $('#shok').disabled = !ok; $('#fobr').textContent = precisaFoto() ? '(obrigatória)' : '(opcional)' };
@@ -885,19 +915,26 @@ function abrirPoste(o, key, novoPos) {
     const lista = F.tipo === 'alterado' ? ALTERACOES : F.tipo === 'nao' ? PENDENCIAS : null;
     dyn.innerHTML = (lista ? `<label class="f">${F.tipo === 'alterado' ? 'O que foi alterado?' : 'Motivo'}</label><div class="chips">${lista.map(a => `<button data-a="${esc(a)}" class="${F.alt.includes(a) ? 'on' : ''}">${esc(a)}</button>`).join('')}</div>` : '')
       + (F.tipo ? `<label class="f">${F.tipo === 'novo' ? 'O que foi feito? *' : 'Observação'}</label><textarea class="i" id="obs" placeholder="${F.tipo === 'alterado' ? 'Ex.: poste deslocado 5 m para não ficar em frente à garagem' : ''}">${esc(F.obs)}</textarea>` : '');
-    $$('[data-a]', dyn).forEach(b => b.onclick = () => { const a = b.dataset.a; F.alt = F.alt.includes(a) ? F.alt.filter(x => x !== a) : [...F.alt, a]; b.classList.toggle('on'); valida() });
-    $('#obs') && ($('#obs').oninput = e => { F.obs = e.target.value; valida() });
+    $$('[data-a]', dyn).forEach(b => b.onclick = () => { const a = b.dataset.a; F.alt = F.alt.includes(a) ? F.alt.filter(x => x !== a) : [...F.alt, a]; b.classList.toggle('on'); valida(); guardar() });
+    $('#obs') && ($('#obs').oninput = e => { F.obs = e.target.value; valida(); guardar() });
     valida();
   }
-  $$('[data-t]', LY).forEach(b => b.onclick = () => { F.tipo = b.dataset.t; F.alt = []; $$('[data-t]', LY).forEach(x => x.classList.toggle('on', x === b)); drawDyn() });
+  $$('[data-t]', LY).forEach(b => b.onclick = () => { F.tipo = b.dataset.t; F.alt = []; $$('[data-t]', LY).forEach(x => x.classList.toggle('on', x === b)); drawDyn(); guardar() });
+  if (F.tipo) $$('[data-t]', LY).forEach(x => x.classList.toggle('on', x.dataset.t === F.tipo));
   drawDyn();
-  $('#dex').onchange = e => F.dataExec = e.target.value || hoje();
-  $('#ffoto').onchange = async e => {
-    const f = e.target.files[0]; if (!f) return; $('#flbl').textContent = 'Processando…';
-    try {
-      F.foto = await prepFoto(f); $('#fprev').src = URL.createObjectURL(F.foto.blob); $('#fprev').classList.remove('hidden'); $('#flbl').textContent = 'Trocar foto';
-      if (F.foto.data && F.foto.data <= hoje()) { F.dataExec = F.foto.data; $('#dex').value = F.foto.data }
-    } catch (err) { console.error(err); $('#flbl').textContent = 'Tirar foto'; toast('Não consegui ler a foto', 1) } valida()
+  $('#dex').onchange = e => { F.dataExec = e.target.value || hoje(); guardar() };
+  const usarFoto = foto => { F.foto = foto; $('#fprev').src = URL.createObjectURL(foto.blob); $('#fprev').classList.remove('hidden'); $('#flbl').textContent = 'Trocar foto'; if (foto.data && foto.data <= hoje()) { F.dataExec = foto.data; $('#dex').value = foto.data } valida() };
+  const deArquivo = async e => {
+    const f = e.target.files[0]; e.target.value = ''; if (!f) return; $('#flbl').textContent = 'Processando…';
+    try { usarFoto(await prepFoto(f)) } catch (err) { console.error(err); $('#flbl').textContent = 'Tirar foto'; toast('Não consegui ler a foto', 1) }
+  };
+  $('#ffoto').onchange = deArquivo; $('#fgal').onchange = deArquivo;
+  $('#fgal').onclick = () => guardar();
+  $('#fcam').onclick = async () => {
+    guardar();
+    const foto = await cameraInterna().catch(() => 'falhou');
+    if (foto === 'falhou') { $('#ffoto').click(); return }   // sem câmera interna: usa a câmera do celular
+    if (foto) usarFoto(foto);
   };
   $('#shok').onclick = async () => {
     const b = $('#shok'); b.disabled = true; b.textContent = 'Salvando…';
@@ -912,7 +949,7 @@ function abrirPoste(o, key, novoPos) {
     const item = { pref: o.pref, registro: reg, fotoB64, fotoLocal: F.foto ? 'data:image/jpeg;base64,' + fotoB64 : null };
     // grava primeiro no aparelho (não se perde), depois tenta enviar
     try { await IDB.set('fila:' + reg.id, item) } catch (e) { }
-    S.fila.push(item); reindex(); closeLayer(); render(true);
+    S.fila.push(item); reindex(); descartar(); closeLayer(); render(true);
     try {
       const s = sessObra(o);
       await api(s, 'registrar', { registro: reg, foto: fotoB64 ? { b64: fotoB64 } : null });

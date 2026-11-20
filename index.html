@@ -157,6 +157,13 @@ body.campo main{padding:0;max-width:none}
 .chips button.on{background:var(--nv);color:#fff;border-color:var(--nv)}
 .photo{display:flex;gap:10px;align-items:center;margin-top:6px}
 .photo img{width:84px;height:84px;object-fit:cover;border-radius:10px}
+.photo .fbtn{flex:1;display:flex;align-items:center;justify-content:center;gap:8px;border:2px dashed #c3c9d3;border-radius:12px;padding:16px 8px;font-weight:700;color:var(--nv);cursor:pointer;background:#fafbfc}
+.photo .fbtn.gal{flex:0 0 auto;padding:16px 14px}
+.camov{position:fixed;inset:0;background:#000;z-index:400;display:flex;flex-direction:column}
+.camov video{flex:1;width:100%;object-fit:cover;min-height:0}
+.cambar{display:flex;justify-content:space-between;align-items:center;padding:18px 20px calc(22px + env(safe-area-inset-bottom));background:#000}
+.cambar .btn{color:#fff;border-color:#555}
+.shutter{width:74px;height:74px;border-radius:50%;border:5px solid #fff;background:var(--or);box-shadow:0 0 0 3px rgba(255,255,255,.25)}
 .photo label{flex:1;display:flex;align-items:center;justify-content:center;gap:8px;border:2px dashed #c3c9d3;border-radius:12px;padding:16px;font-weight:700;color:var(--nv);cursor:pointer;background:#fafbfc}
 .hist{margin-top:12px;border-top:1px solid var(--ln);padding-top:10px}
 .hist div{font-size:12.5px;padding:4px 0;color:var(--mu)}
