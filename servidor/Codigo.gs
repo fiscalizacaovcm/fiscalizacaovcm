@@ -2,27 +2,31 @@
  * Fiscalização de Obras · servidor da divisão (Apps Script da planilha)
  * ---------------------------------------------------------------------
  * Cole este arquivo inteiro em Extensões > Apps Script da planilha da divisão.
- * Depois: menu Fiscalização > 1. Configurar  e  Implantar > Nova implantação > App da Web
+ * Primeira vez: menu Fiscalização > 1. Configurar  e  Implantar > Nova implantação > App da Web
  *   (Executar como: Eu · Quem pode acessar: Qualquer pessoa).
- * Para atualizar o código depois: Implantar > Gerenciar implantações > ✏️ > Nova versão.
+ * Para atualizar o código depois: Implantar > Gerenciar implantações > ✏️ > Versão: Nova versão > Implantar.
  * NUNCA use "Nova implantação" de novo, porque o endereço muda e o app perde a conexão.
  */
-const VERSAO_SERVIDOR = '1.1';
+const VERSAO_SERVIDOR = '1.2';
 
+const COLS_OBRAS = ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us',
+  'empenhoEm', 'prazo', 'status', 'lat', 'lon', 'locOrigem', 'plantaId', 'plantaW', 'plantaH', 'pdfId', 'pdfNome',
+  'postes', 'criadoPor', 'criadoEm', 'atualizadoEm', 'concluidaEm', 'resumo'];
+const COLS_REGS = ['id', 'obra', 'poste', 'tipo', 'alt', 'obs', 'fotoId', 'lat', 'lon', 'gpsOrigem', 'precisao', 'dataExec',
+  'marcadoEm', 'recebidoEm', 'nome', 'empresa', 'x', 'y', 'invalido', 'invalidadoPor', 'alteradoEm'];
 const ABAS = {
-  obras: ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us',
-    'empenhoEm', 'prazo', 'status', 'lat', 'lon', 'locOrigem', 'plantaId', 'plantaW', 'plantaH', 'pdfId', 'pdfNome',
-    'postes', 'criadoPor', 'criadoEm', 'atualizadoEm'],
-  registros: ['id', 'obra', 'poste', 'tipo', 'alt', 'obs', 'fotoId', 'lat', 'lon', 'gpsOrigem', 'precisao', 'dataExec',
-    'marcadoEm', 'recebidoEm', 'nome', 'empresa', 'x', 'y', 'invalido', 'invalidadoPor'],
+  obras: COLS_OBRAS,
+  registros: COLS_REGS,
   chaves: ['chave', 'papel', 'empresa', 'responsavel', 'ativa', 'criadaEm', 'ultimoUso'],
-  config: ['item', 'valor']
+  config: ['item', 'valor'],
+  obras_historico: COLS_OBRAS,
+  registros_historico: COLS_REGS
 };
 const COL_DATA = ['empenhoEm', 'prazo', 'dataExec'];
 const COL_NUM = ['us', 'lat', 'lon', 'plantaW', 'plantaH', 'precisao', 'x', 'y'];
 const PAPEIS = ['gestor', 'fiscal', 'empreiteira'];
 const EDITAVEIS_OBRA = ['ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us', 'empenhoEm',
-  'prazo', 'status', 'lat', 'lon', 'locOrigem', 'postes'];
+  'prazo', 'lat', 'lon', 'locOrigem', 'postes'];
 
 /* ============================ menu e configuração ============================ */
 function onOpen() {
@@ -33,25 +37,17 @@ function onOpen() {
     .addToUi();
 }
 
+/** Qualquer edição feita à mão na planilha avisa o app que há novidade. */
+function onEdit(e) { marcarAlteracao(); }
+
 function configurar() {
   const ui = SpreadsheetApp.getUi();
   const ss = SpreadsheetApp.getActive();
-  Object.keys(ABAS).forEach(function (nome) {
-    const cab = ABAS[nome];
-    let sh = ss.getSheetByName(nome);
-    if (!sh) sh = ss.insertSheet(nome);
-    if (sh.getLastRow() === 0) {
-      sh.getRange(1, 1, 1, cab.length).setValues([cab]).setFontWeight('bold').setBackground('#101826').setFontColor('#ffffff');
-      sh.setFrozenRows(1);
-    }
-    // tudo como texto puro: evita o Sheets transformar datas e códigos
-    sh.getRange(1, 1, sh.getMaxRows(), cab.length).setNumberFormat('@');
-  });
+  garantirEstrutura();
   ['Página1', 'Sheet1', 'Planilha1'].forEach(function (n) {
     const s = ss.getSheetByName(n);
     if (s && s.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(s);
   });
-
   const cfg = lerConfig();
   if (!cfg.divisao) {
     const r = ui.prompt('Sigla da divisão', 'Ex.: VCMCEP', ui.ButtonSet.OK_CANCEL);
@@ -72,7 +68,6 @@ function configurar() {
     salvarConfig('pastaPdfs', raiz.createFolder('pdfs').getId());
     salvarConfig('pastaFotos', raiz.createFolder('fotos').getId());
   }
-  // primeiro código de gestor
   const ch = ss.getSheetByName('chaves');
   if (ch.getLastRow() < 2) {
     ch.appendRow(['', 'gestor', 'Copel', 'Gestor ' + div, 'SIM', '', '']);
@@ -80,12 +75,33 @@ function configurar() {
   }
   gerarCodigos();
   ui.alert('Pronto',
-    'Abas e pastas criadas para ' + div + '.\n\n' +
+    'Abas e pastas prontas para ' + div + '.\n\n' +
     'Próximos passos:\n' +
-    '1) Na aba "chaves", inclua uma linha por empreiteira (papel = empreiteira, empresa = nome igual ao que vai no empenho) e rode "2. Gerar códigos que faltam".\n' +
-    '2) Implantar > Nova implantação > App da Web (Executar como: Eu · Acesso: Qualquer pessoa).\n' +
+    '1) Na aba "chaves", inclua uma linha por empreiteira (papel = empreiteira, empresa = nome) e rode "2. Gerar códigos que faltam".\n' +
+    '2) Implantar > Nova implantação > App da Web (Executar como: Eu · Acesso: Qualquer pessoa) — só na primeira vez.\n' +
     '3) Copie o endereço que termina em /exec e cole no config.js do app.',
     ui.ButtonSet.OK);
+}
+
+/** Cria as abas que faltam e acrescenta colunas novas no fim do cabeçalho (sem mexer nos dados). */
+function garantirEstrutura() {
+  const ss = SpreadsheetApp.getActive();
+  Object.keys(ABAS).forEach(function (nome) {
+    const cab = ABAS[nome];
+    let sh = ss.getSheetByName(nome);
+    if (!sh) sh = ss.insertSheet(nome);
+    const atual = sh.getLastColumn() ? sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0] : [];
+    if (atual.length < cab.length || atual.join('|') !== cab.slice(0, atual.length).join('|') || sh.getLastRow() === 0) {
+      sh.getRange(1, 1, 1, cab.length).setValues([cab]).setFontWeight('bold').setBackground('#101826').setFontColor('#ffffff');
+      sh.setFrozenRows(1);
+    }
+    sh.getRange(1, 1, sh.getMaxRows(), cab.length).setNumberFormat('@');
+  });
+  PropertiesService.getScriptProperties().setProperty('estrutura', VERSAO_SERVIDOR);
+}
+function estruturaEmDia() {
+  if (PropertiesService.getScriptProperties().getProperty('estrutura') === VERSAO_SERVIDOR) return;
+  comTrava(garantirEstrutura);
 }
 
 function gerarCodigos() {
@@ -108,31 +124,35 @@ function gerarCodigos() {
       n++;
     }
   });
+  marcarAlteracao();
   if (n) SpreadsheetApp.getActive().toast(n + ' código(s) gerado(s).', 'Fiscalização');
 }
 
 function mostrarPastas() {
-  const cfg = lerConfig();
-  SpreadsheetApp.getUi().alert('Pasta dos arquivos: https://drive.google.com/drive/folders/' + cfg.pastaRaiz);
+  SpreadsheetApp.getUi().alert('Pasta dos arquivos: https://drive.google.com/drive/folders/' + lerConfig().pastaRaiz);
 }
 
 /* ============================ entrada HTTP ============================ */
 function doGet(e) {
-  const cfg = lerConfig();
-  return json({ ok: true, app: 'fiscalizacao', versao: VERSAO_SERVIDOR, divisao: cfg.divisao || null });
+  return json({ ok: true, app: 'fiscalizacao', versao: VERSAO_SERVIDOR, divisao: lerConfig().divisao || null });
 }
 
 function doPost(e) {
   let req;
   try { req = JSON.parse(e.postData.contents); } catch (err) { return json({ ok: false, erro: 'requisição inválida' }); }
   try {
+    estruturaEmDia();
     const p = perfil(req.chave);
     if (!p) return json({ ok: false, erro: 'código de acesso inválido ou bloqueado', codigo: 'chave' });
     switch (req.acao) {
       case 'login': marcarUso(p); return json({ ok: true, perfil: publico(p), versao: VERSAO_SERVIDOR });
-      case 'dados': return json(dados(p));
+      case 'dados': return json(dados(p, req));
       case 'empenhar': return json(empenhar(p, req));
       case 'atualizarObra': return json(atualizarObra(p, req));
+      case 'concluir': return json(concluir(p, req));
+      case 'reabrir': return json(reabrir(p, req));
+      case 'historico': return json(historico(p));
+      case 'obraHistorico': return json(obraHistorico(p, req));
       case 'registrar': return json(registrar(p, req));
       case 'invalidar': return json(invalidar(p, req));
       default: return json({ ok: false, erro: 'ação desconhecida' });
@@ -142,24 +162,44 @@ function doPost(e) {
   }
 }
 
-/* ============================ ações ============================ */
-function dados(p) {
+/* ============================ leitura ============================ */
+/**
+ * dados: com "desde" (data/hora da última sincronização do celular), devolve só o que mudou.
+ * Se nada mudou desde então, responde na hora sem ler a planilha.
+ */
+function dados(p, req) {
+  const agora = agoraIso();
+  const ult = PropertiesService.getScriptProperties().getProperty('ult') || '';
+  if (req.desde && ult && ult < req.desde) return { ok: true, semMudanca: true, agora: agora };
   let obras = ler('obras');
   if (p.papel === 'empreiteira') obras = obras.filter(function (o) { return norm(o.empreiteira) === norm(p.empresa); });
   const ids = {};
-  obras.forEach(function (o) {
-    ids[o.id] = 1;
-    try { o.postes = JSON.parse(o.postes || '[]'); } catch (err) { o.postes = []; }
-  });
-  const regs = ler('registros').filter(function (r) { return ids[r.obra]; });
-  regs.forEach(function (r) {
-    r.alt = r.alt ? String(r.alt).split(' | ') : [];
-    r.invalido = r.invalido === 'SIM';
-    r.gps = (r.lat !== '' && r.lat != null && r.lon !== '' && r.lon != null) ? { lat: r.lat, lon: r.lon, origem: r.gpsOrigem, precisao: r.precisao } : null;
-  });
-  const out = { ok: true, divisao: lerConfig().divisao, obras: obras, registros: regs, agora: agoraIso() };
+  obras.forEach(function (o) { ids[o.id] = 1; });
+  const idsObras = obras.map(function (o) { return o.id; });
+  let regs = ler('registros').filter(function (r) { return ids[r.obra]; });
+  if (req.desde) {
+    const corte = new Date(new Date(req.desde).getTime() - 120000).toISOString(); // 2 min de sobra
+    obras = obras.filter(function (o) { return String(o.atualizadoEm || o.criadoEm) >= corte; });
+    regs = regs.filter(function (r) { return String(r.alteradoEm || r.recebidoEm) >= corte; });
+  }
+  const out = {
+    ok: true, divisao: lerConfig().divisao, incremental: !!req.desde, agora: agora,
+    obras: obras.map(normObra), registros: regs.map(normReg), idsObras: idsObras,
+    qtdHistorico: Math.max(0, (aba('obras_historico') ? aba('obras_historico').getLastRow() : 1) - 1)
+  };
   if (p.papel !== 'empreiteira') out.empreiteiras = listaEmpreiteiras();
   return out;
+}
+function normObra(o) {
+  try { o.postes = JSON.parse(o.postes || '[]'); } catch (err) { o.postes = []; }
+  try { o.resumo = o.resumo ? JSON.parse(o.resumo) : null; } catch (err) { o.resumo = null; }
+  return o;
+}
+function normReg(r) {
+  r.alt = r.alt ? String(r.alt).split(' | ') : [];
+  r.invalido = r.invalido === 'SIM';
+  r.gps = (r.lat !== '' && r.lat != null && r.lon !== '' && r.lon != null) ? { lat: r.lat, lon: r.lon, origem: r.gpsOrigem, precisao: r.precisao } : null;
+  return r;
 }
 
 /** Empreiteiras ativas da aba "chaves" (papel = empreiteira), para a lista do empenho. */
@@ -174,6 +214,7 @@ function listaEmpreiteiras() {
   return Object.keys(vistos).sort(function (x, y) { return x.localeCompare(y, 'pt-BR'); });
 }
 
+/* ============================ obras ============================ */
 function empenhar(p, req) {
   if (p.papel !== 'gestor') return { ok: false, erro: 'só o gestor pode empenhar obras' };
   const o = req.obra || {};
@@ -202,32 +243,113 @@ function empenhar(p, req) {
   linha.criadoPor = p.responsavel || p.chave;
   linha.criadoEm = agoraIso();
   linha.atualizadoEm = linha.criadoEm;
-  comTrava(function () { anexar('obras', linha); });
+  comTrava(function () { anexar('obras', linha); marcarAlteracao(); });
   return { ok: true, id: id };
 }
 
 function atualizarObra(p, req) {
   if (p.papel !== 'gestor') return { ok: false, erro: 'só o gestor pode alterar a obra' };
+  if (req.campos && req.campos.status === 'concluida') return concluir(p, req);
   const campos = {};
   EDITAVEIS_OBRA.forEach(function (k) {
     if (req.campos && req.campos[k] !== undefined) campos[k] = k === 'postes' ? JSON.stringify(req.campos[k]) : req.campos[k];
   });
   campos.atualizadoEm = agoraIso();
   let ok = false;
-  comTrava(function () { ok = atualizarLinha('obras', req.id, campos); });
+  comTrava(function () { ok = atualizarLinha('obras', req.id, campos); marcarAlteracao(); });
   return ok ? { ok: true } : { ok: false, erro: 'obra não encontrada' };
 }
 
+/** Conclui a obra: move a obra e todos os registros dela para as abas de histórico. */
+function concluir(p, req) {
+  if (p.papel !== 'gestor') return { ok: false, erro: 'só o gestor pode concluir a obra' };
+  let res = { ok: false, erro: 'obra não encontrada' };
+  comTrava(function () {
+    const row = buscarLinha('obras', req.id);
+    if (!row) return;
+    const o = linhaObj('obras', row);
+    const regs = ler('registros').filter(function (r) { return r.obra === req.id; });
+    const agora = agoraIso();
+    o.status = 'concluida';
+    o.concluidaEm = agora;
+    o.atualizadoEm = agora;
+    o.resumo = JSON.stringify(resumoObra(o, regs));
+    anexar('obras_historico', o);
+    moverLinhas('registros', 'registros_historico', req.id, null);
+    aba('obras').deleteRow(row);
+    marcarAlteracao();
+    res = { ok: true };
+  });
+  return res;
+}
+
+/** Reabre uma obra concluída: volta do histórico para as abas ativas. */
+function reabrir(p, req) {
+  if (p.papel !== 'gestor') return { ok: false, erro: 'só o gestor pode reabrir a obra' };
+  let res = { ok: false, erro: 'obra não encontrada no histórico' };
+  comTrava(function () {
+    const row = buscarLinha('obras_historico', req.id);
+    if (!row) return;
+    const o = linhaObj('obras_historico', row);
+    const agora = agoraIso();
+    o.status = 'ativa';
+    o.concluidaEm = '';
+    o.resumo = '';
+    o.atualizadoEm = agora;
+    anexar('obras', o);
+    moverLinhas('registros_historico', 'registros', req.id, agora);
+    aba('obras_historico').deleteRow(row);
+    marcarAlteracao();
+    res = { ok: true };
+  });
+  return res;
+}
+
+function historico(p) {
+  let L = ler('obras_historico');
+  if (p.papel === 'empreiteira') L = L.filter(function (o) { return norm(o.empreiteira) === norm(p.empresa); });
+  return {
+    ok: true, obras: L.map(function (o) {
+      let resumo = null; try { resumo = o.resumo ? JSON.parse(o.resumo) : null; } catch (err) { }
+      return { id: o.id, projeto: o.projeto, descricao: o.descricao, cliente: o.cliente, municipio: o.municipio, empreiteira: o.empreiteira,
+        us: o.us, aes: o.aes, empenhoEm: o.empenhoEm, prazo: o.prazo, concluidaEm: o.concluidaEm, resumo: resumo };
+    })
+  };
+}
+
+function obraHistorico(p, req) {
+  const o = ler('obras_historico').filter(function (x) { return x.id === req.id; })[0];
+  if (!o) return { ok: false, erro: 'obra não encontrada no histórico' };
+  if (p.papel === 'empreiteira' && norm(o.empreiteira) !== norm(p.empresa)) return { ok: false, erro: 'esta obra não é da sua empresa' };
+  const regs = ler('registros_historico').filter(function (r) { return r.obra === req.id; });
+  return { ok: true, obra: normObra(o), registros: regs.map(normReg) };
+}
+
+/** Situação final por poste: último registro válido de cada poste previsto. */
+function resumoObra(o, regs) {
+  let postes = [];
+  try { postes = JSON.parse(o.postes || '[]'); } catch (err) { }
+  const ult = {};
+  regs.filter(function (r) { return r.invalido !== 'SIM'; })
+    .sort(function (a, b) { return String(a.marcadoEm || a.recebidoEm).localeCompare(String(b.marcadoEm || b.recebidoEm)); })
+    .forEach(function (r) { ult[r.tipo === 'novo' ? 'N:' + r.id : r.poste] = r.tipo; });
+  let ok = 0, alt = 0, bad = 0;
+  postes.forEach(function (pp) { const t = ult['P' + pp.n]; if (t === 'conforme') ok++; else if (t === 'alterado') alt++; else if (t === 'nao') bad++; });
+  const novos = Object.keys(ult).filter(function (k) { return k.indexOf('N:') === 0; }).length;
+  const tot = postes.length, exec = ok + alt;
+  return { tot: tot, ok: ok, alt: alt, bad: bad, exec: exec, novos: novos, registros: regs.length, usExec: tot ? Math.round((Number(o.us) || 0) * exec / tot) : 0 };
+}
+
+/* ============================ registros ============================ */
 function registrar(p, req) {
   const r = req.registro || {};
   if (!r.id || !r.obra || !r.tipo) return { ok: false, erro: 'registro incompleto' };
   if (['conforme', 'alterado', 'nao', 'novo'].indexOf(r.tipo) < 0) return { ok: false, erro: 'tipo inválido' };
   const obra = ler('obras').filter(function (o) { return o.id === r.obra; })[0];
-  if (!obra) return { ok: false, erro: 'obra não encontrada' };
+  if (!obra) return { ok: false, erro: 'obra não encontrada ou já concluída' };
   if (p.papel === 'empreiteira' && norm(obra.empreiteira) !== norm(p.empresa)) return { ok: false, erro: 'esta obra não é da sua empresa' };
   // idempotente: o celular pode reenviar o mesmo registro quando o sinal volta
-  const ja = buscarLinha('registros', r.id);
-  if (ja) return { ok: true, id: r.id, repetido: true };
+  if (buscarLinha('registros', r.id)) return { ok: true, id: r.id, repetido: true };
   let fotoId = '';
   if (req.foto && req.foto.b64) {
     const nome = obra.projeto + '_' + String(r.poste || 'novo').replace(/[^A-Za-z0-9]/g, '') + '_' + r.id + '.jpg';
@@ -235,14 +357,15 @@ function registrar(p, req) {
       .createFile(Utilities.newBlob(Utilities.base64Decode(req.foto.b64), 'image/jpeg', nome)).getId();
   }
   const g = r.gps || {};
+  const agora = agoraIso();
   const linha = {
     id: r.id, obra: r.obra, poste: r.poste || '', tipo: r.tipo, alt: (r.alt || []).join(' | '), obs: r.obs || '',
     fotoId: fotoId, lat: g.lat != null ? g.lat : '', lon: g.lon != null ? g.lon : '', gpsOrigem: g.origem || '',
     precisao: g.precisao != null ? g.precisao : '', dataExec: r.dataExec || '', marcadoEm: r.marcadoEm || '',
-    recebidoEm: agoraIso(), nome: r.nome || p.responsavel || '', empresa: p.papel === 'empreiteira' ? p.empresa : (r.empresa || p.empresa),
-    x: r.x != null ? r.x : '', y: r.y != null ? r.y : '', invalido: '', invalidadoPor: ''
+    recebidoEm: agora, nome: r.nome || p.responsavel || '', empresa: p.papel === 'empreiteira' ? p.empresa : (r.empresa || p.empresa),
+    x: r.x != null ? r.x : '', y: r.y != null ? r.y : '', invalido: '', invalidadoPor: '', alteradoEm: agora
   };
-  comTrava(function () { if (!buscarLinha('registros', r.id)) anexar('registros', linha); });
+  comTrava(function () { if (!buscarLinha('registros', r.id)) { anexar('registros', linha); marcarAlteracao(); } });
   return { ok: true, id: r.id, fotoId: fotoId };
 }
 
@@ -250,13 +373,21 @@ function invalidar(p, req) {
   if (p.papel === 'empreiteira') return { ok: false, erro: 'só a fiscalização pode desconsiderar registros' };
   let ok = false;
   comTrava(function () {
-    ok = atualizarLinha('registros', req.id, { invalido: req.invalido ? 'SIM' : '', invalidadoPor: req.invalido ? (p.responsavel || p.papel) + ' · ' + agoraIso() : '' });
+    const agora = agoraIso();
+    ok = atualizarLinha('registros', req.id, { invalido: req.invalido ? 'SIM' : '', invalidadoPor: req.invalido ? (p.responsavel || p.papel) + ' · ' + agora : '', alteradoEm: agora });
+    marcarAlteracao();
   });
   return ok ? { ok: true } : { ok: false, erro: 'registro não encontrado' };
 }
 
 /* ============================ planilha ============================ */
 function aba(nome) { return SpreadsheetApp.getActive().getSheetByName(nome); }
+
+function converter(k, v, tz) {
+  if (v instanceof Date) v = COL_DATA.indexOf(k) >= 0 ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : v.toISOString();
+  if (COL_NUM.indexOf(k) >= 0 && v !== '' && v !== null) { const n = Number(String(v).replace(',', '.')); v = isNaN(n) ? '' : n; }
+  return v;
+}
 
 function ler(nome) {
   const sh = aba(nome);
@@ -266,24 +397,57 @@ function ler(nome) {
   const tz = Session.getScriptTimeZone();
   return vals.filter(function (r) { return r[0] !== ''; }).map(function (r) {
     const o = {};
-    cab.forEach(function (k, i) {
-      let v = r[i];
-      if (v instanceof Date) v = COL_DATA.indexOf(k) >= 0 ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : v.toISOString();
-      if (COL_NUM.indexOf(k) >= 0 && v !== '' && v !== null) { const n = Number(String(v).replace(',', '.')); v = isNaN(n) ? '' : n; }
-      o[k] = v;
-    });
+    cab.forEach(function (k, i) { o[k] = converter(k, r[i], tz); });
     return o;
   });
+}
+
+function linhaObj(nome, row) {
+  const cab = ABAS[nome];
+  const r = aba(nome).getRange(row, 1, 1, cab.length).getValues()[0];
+  const o = {}; const tz = Session.getScriptTimeZone();
+  cab.forEach(function (k, i) { o[k] = r[i] instanceof Date ? converter(k, r[i], tz) : r[i]; });
+  return o;
 }
 
 function anexar(nome, obj) {
   const cab = ABAS[nome];
   const sh = aba(nome);
   const linha = cab.map(function (k) { return obj[k] === undefined || obj[k] === null ? '' : String(obj[k]); });
-  const r = sh.getLastRow() + 1;
-  const rg = sh.getRange(r, 1, 1, cab.length);
+  const rg = sh.getRange(sh.getLastRow() + 1, 1, 1, cab.length);
   rg.setNumberFormat('@');
   rg.setValues([linha]);
+}
+
+/** Move todas as linhas de uma obra entre abas de registros (opcionalmente marcando alteradoEm). */
+function moverLinhas(de, para, obraId, alteradoEm) {
+  const shDe = aba(de), shPara = aba(para);
+  if (!shDe || shDe.getLastRow() < 2) return 0;
+  const cab = ABAS[de];
+  const cObra = cab.indexOf('obra'), cAlt = cab.indexOf('alteradoEm');
+  const vals = shDe.getRange(2, 1, shDe.getLastRow() - 1, cab.length).getValues();
+  const linhas = [], rows = [];
+  vals.forEach(function (r, i) {
+    if (r[cObra] === obraId) {
+      const c = r.map(function (v) { return v instanceof Date ? v.toISOString() : String(v); });
+      if (alteradoEm) c[cAlt] = alteradoEm;
+      linhas.push(c); rows.push(i + 2);
+    }
+  });
+  if (!linhas.length) return 0;
+  const rg = shPara.getRange(shPara.getLastRow() + 1, 1, linhas.length, cab.length);
+  rg.setNumberFormat('@');
+  rg.setValues(linhas);
+  // apaga de baixo para cima, em blocos contínuos
+  rows.sort(function (a, b) { return b - a; });
+  let i = 0;
+  while (i < rows.length) {
+    let j = i;
+    while (j + 1 < rows.length && rows[j + 1] === rows[j] - 1) j++;
+    shDe.deleteRows(rows[j], j - i + 1);
+    i = j + 1;
+  }
+  return linhas.length;
 }
 
 function buscarLinha(nome, id) {
@@ -321,6 +485,11 @@ function salvarConfig(item, valor) {
     for (let i = 0; i < v.length; i++) if (v[i][0] === item) { sh.getRange(i + 2, 2).setValue(valor); return; }
   }
   sh.appendRow([item, valor]);
+}
+
+/** Marca a hora da última alteração: o app usa isso para não reler a planilha à toa. */
+function marcarAlteracao() {
+  try { PropertiesService.getScriptProperties().setProperty('ult', agoraIso()); } catch (err) { }
 }
 
 /* ============================ acesso ============================ */

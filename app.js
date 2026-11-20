@@ -1,7 +1,7 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.2.0';
+const VERSAO_APP = '1.3.0';
 const LIB = {
   pdf: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   pdfw: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
@@ -12,7 +12,7 @@ const PRMAP = window.PRMAP;
 
 /* ================= estado ================= */
 const S = {
-  sess: lsGet('fisc.sess', []), obras: [], regs: [], emps: {}, fila: [], idx: {}, carregado: false, carregando: false, ultimaSync: null,
+  sess: lsGet('fisc.sess', []), obras: [], regs: [], emps: {}, raw: {}, hist: null, histLista: null, ultimaTentativa: 0, fila: [], idx: {}, carregado: false, carregando: false, ultimaSync: null,
   mode: null, view: 'painel', obraId: null, nome: lsGet('fisc.nome', ''), verTodas: lsGet('fisc.todas', false), mapZoom: 'obras', divFiltro: ''
 };
 function lsGet(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v) } catch (e) { return d } }
@@ -86,32 +86,71 @@ function normalizar(pref, d) {
   return { obras, regs };
 }
 
-async function sincronizar(silencioso) {
-  if (S.carregando || !S.sess.length) return;
-  S.carregando = true; setSt('sincronizando…');
-  let falhou = 0;
+/* cópia local por divisão: obras e registros por id + data da última sincronização */
+function cacheVazio() { return { obras: {}, registros: {}, desde: null, empreiteiras: null, qtdHistorico: 0 } }
+function converterCache(c) {
+  if (!c) return cacheVazio();
+  if (Array.isArray(c.obras)) return { obras: Object.fromEntries(c.obras.map(o => [o.id, o])), registros: Object.fromEntries((c.registros || []).map(r => [r.id, r])), desde: null, empreiteiras: c.empreiteiras || null, qtdHistorico: 0 };
+  return Object.assign(cacheVazio(), c);
+}
+async function carregarRaw(pref) {
+  if (!S.raw[pref]) { const c = await IDB.get('cache:' + pref).catch(() => null); S.raw[pref] = converterCache(c) }
+  return S.raw[pref];
+}
+function aplicar(raw, d) {
+  if (d.semMudanca) { raw.desde = d.agora; return false }
+  if (!d.incremental) { raw.obras = {}; raw.registros = {} }
+  (d.obras || []).forEach(o => raw.obras[o.id] = o);
+  (d.registros || []).forEach(r => raw.registros[r.id] = r);
+  if (Array.isArray(d.idsObras)) {
+    const vale = new Set(d.idsObras);
+    for (const id in raw.obras) if (!vale.has(id)) delete raw.obras[id];
+    for (const id in raw.registros) if (!vale.has(raw.registros[id].obra)) delete raw.registros[id];
+  }
+  if (Array.isArray(d.empreiteiras)) raw.empreiteiras = d.empreiteiras;
+  if (d.qtdHistorico != null) raw.qtdHistorico = d.qtdHistorico;
+  raw.desde = d.incremental !== undefined ? d.agora : null; // servidor antigo: sempre completo
+  return true;
+}
+function montar() {
   const obras = [], regs = [];
   for (const s of S.sess) {
+    const raw = S.raw[s.pref]; if (!raw) continue;
+    const n = normalizar(s.pref, { obras: Object.values(raw.obras), registros: Object.values(raw.registros) });
+    obras.push(...n.obras); regs.push(...n.regs);
+    if (Array.isArray(raw.empreiteiras)) S.emps[s.pref] = raw.empreiteiras;
+  }
+  S.obras = obras; S.regs = regs;
+}
+const qtdHistorico = () => S.sess.filter(s => !S.divFiltro || s.pref === S.divFiltro).reduce((n, s) => n + ((S.raw[s.pref] || {}).qtdHistorico || 0), 0);
+
+async function sincronizar(op) {
+  if (!S.sess.length) return;
+  if (S.carregando) { S.denovo = true; return }
+  const completo = !!(op && op.completo);
+  S.carregando = true; setSt('sincronizando…');
+  let falhou = 0, mudou = !S.carregado;
+  for (const s of [...S.sess]) {
+    const raw = await carregarRaw(s.pref);
     try {
-      const d = await api(s, 'dados');
-      const n = normalizar(s.pref, d);
-      obras.push(...n.obras); regs.push(...n.regs);
-      if (Array.isArray(d.empreiteiras)) S.emps[s.pref] = d.empreiteiras;
-      IDB.set('cache:' + s.pref, { obras: d.obras, registros: d.registros, empreiteiras: d.empreiteiras || null, em: new Date().toISOString() }).catch(() => { });
+      const d = await api(s, 'dados', raw.desde && !completo ? { desde: raw.desde } : {});
+      if (aplicar(raw, d)) mudou = true;
+      IDB.set('cache:' + s.pref, raw).catch(() => { });
     } catch (e) {
-      if (e.codigo === 'chave') { toast(`O código da ${s.div} foi bloqueado ou removido.`, 1); S.sess = S.sess.filter(x => x !== s); salvarSess(); continue }
+      if (e.codigo === 'chave') { toast(`O código da ${s.div} foi bloqueado ou removido.`, 1); S.sess = S.sess.filter(x => x !== s); salvarSess(); delete S.raw[s.pref]; mudou = true; continue }
       falhou++;
-      const c = await IDB.get('cache:' + s.pref).catch(() => null);
-      if (c) { const n = normalizar(s.pref, c); obras.push(...n.obras); regs.push(...n.regs); if (Array.isArray(c.empreiteiras)) S.emps[s.pref] = c.empreiteiras }
     }
   }
-  S.obras = obras; S.regs = regs; S.carregado = true; S.carregando = false;
+  S.ultimaTentativa = Date.now();
+  if (mudou) montar();
+  S.carregado = true; S.carregando = false;
   if (!falhou) S.ultimaSync = new Date();
   await carregarFila();
   reindex();
   setSt(falhou ? 'sem conexão · dados salvos no aparelho' : '', !!falhou);
   if (!S.sess.length) { route(); return }
-  render(true);
+  if (mudou) render(true);
+  if (S.denovo) { S.denovo = false; setTimeout(() => sincronizar(), 300) }
 }
 
 /* ---------- fila de envio (offline) ---------- */
@@ -140,11 +179,12 @@ async function enviarFila() {
   }
   enviando = false;
   await carregarFila();
-  if (enviados) { toast(enviados + ' registro(s) pendente(s) enviado(s)'); sincronizar(true) } else { reindex(); render(true) }
+  if (enviados) { toast(enviados + ' registro(s) pendente(s) enviado(s)'); sincronizar() } else { reindex(); render(true) }
 }
-addEventListener('online', () => { enviarFila(); sincronizar(true) });
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { enviarFila(); sincronizar(true) } });
-setInterval(() => { if (document.visibilityState === 'visible') { enviarFila(); sincronizar(true) } }, 90000);
+addEventListener('online', () => { enviarFila(); sincronizar() });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { enviarFila(); if (Date.now() - S.ultimaTentativa > 30000) sincronizar() } });
+// campo atualiza a cada 4 min e gestão a cada 2 min (o envio de registros é sempre imediato)
+setInterval(() => { if (document.visibilityState !== 'visible') return; enviarFila(); const int = S.mode === 'campo' ? 240000 : 120000; if (Date.now() - S.ultimaTentativa >= int) sincronizar() }, 30000);
 
 /* ================= índice derivado ================= */
 const EXEC = new Set(['conforme', 'alterado', 'novo']);
@@ -153,38 +193,41 @@ function todosRegs() {
   const ids = new Set(S.regs.map(r => r.id));
   return S.regs.concat(pend.filter(p => !ids.has(p.id)));
 }
+function novoIdx() { return { postes: new Map(), novos: [], regs: [], ultimo: null, porDia: {} } }
+function acumular(I, r) {
+  I.regs.push(r);
+  if (r.invalido) return;
+  if (r.tipo === 'novo' && !I.novos.find(n => n.key === 'N:' + r.id)) I.novos.push({ key: 'N:' + r.id, x: Number(r.x), y: Number(r.y), desc: r.obs, id: r.id });
+  const key = r.tipo === 'novo' ? 'N:' + r.id : r.poste;
+  const st = I.postes.get(key) || { hist: [], first: null };
+  st.hist.push(r); st.last = r;
+  if (EXEC.has(r.tipo) && !st.first) st.first = r.dataExec || (r.em || '').slice(0, 10);
+  I.postes.set(key, st);
+  if (!I.ultimo || r.em > I.ultimo) I.ultimo = r.em;
+}
+function fechar(o, I) {
+  const tot = (o.postes || []).length; let ok = 0, alt = 0, bad = 0;
+  for (const p of (o.postes || [])) {
+    const st = I.postes.get('P' + p.n); if (!st || !st.last) continue;
+    const t = st.last.tipo; if (t === 'conforme') ok++; else if (t === 'alterado') alt++; else if (t === 'nao') bad++;
+  }
+  for (const [, st] of I.postes) if (st.first) I.porDia[st.first] = (I.porDia[st.first] || 0) + 1;
+  I.tot = tot; I.ok = ok; I.alt = alt; I.bad = bad; I.exec = ok + alt; I.pct = tot ? (ok + alt) / tot : 0;
+  I.usExec = (o.us || 0) * I.pct;
+  I.pend = I.regs.filter(r => r.pendente).length;
+  const gps = I.regs.filter(r => r.gps && !r.invalido && r.gps.lat != null);
+  I.gps = gps.length ? { lat: gps.reduce((s, r) => s + Number(r.gps.lat), 0) / gps.length, lon: gps.reduce((s, r) => s + Number(r.gps.lon), 0) / gps.length } : null;
+}
+const porData = (a, b) => (a.em || '').localeCompare(b.em || '');
 function reindex() {
   const idx = {};
-  for (const o of S.obras) idx[o.id] = { postes: new Map(), novos: [], regs: [], ultimo: null, porDia: {} };
-  const regs = todosRegs().sort((a, b) => (a.em || '').localeCompare(b.em || ''));
-  for (const r of regs) {
-    const I = idx[r.obra]; if (!I) continue;
-    I.regs.push(r);
-    if (r.invalido) continue;
-    if (r.tipo === 'novo' && !I.novos.find(n => n.key === 'N:' + r.id)) I.novos.push({ key: 'N:' + r.id, x: Number(r.x), y: Number(r.y), desc: r.obs, id: r.id });
-    const key = r.tipo === 'novo' ? 'N:' + r.id : r.poste;
-    const st = I.postes.get(key) || { hist: [], first: null };
-    st.hist.push(r); st.last = r;
-    if (EXEC.has(r.tipo) && !st.first) st.first = r.dataExec || (r.em || '').slice(0, 10);
-    I.postes.set(key, st);
-    if (!I.ultimo || r.em > I.ultimo) I.ultimo = r.em;
-  }
-  for (const o of S.obras) {
-    const I = idx[o.id]; const tot = (o.postes || []).length;
-    let ok = 0, alt = 0, bad = 0;
-    for (const p of (o.postes || [])) {
-      const st = I.postes.get('P' + p.n); if (!st || !st.last) continue;
-      const t = st.last.tipo; if (t === 'conforme') ok++; else if (t === 'alterado') alt++; else if (t === 'nao') bad++;
-    }
-    for (const [, st] of I.postes) if (st.first) I.porDia[st.first] = (I.porDia[st.first] || 0) + 1;
-    I.tot = tot; I.ok = ok; I.alt = alt; I.bad = bad; I.exec = ok + alt; I.pct = tot ? (ok + alt) / tot : 0;
-    I.usExec = (o.us || 0) * I.pct;
-    I.pend = I.regs.filter(r => r.pendente).length;
-    const gps = I.regs.filter(r => r.gps && !r.invalido && r.gps.lat != null);
-    I.gps = gps.length ? { lat: gps.reduce((s, r) => s + Number(r.gps.lat), 0) / gps.length, lon: gps.reduce((s, r) => s + Number(r.gps.lon), 0) / gps.length } : null;
-  }
+  for (const o of S.obras) idx[o.id] = novoIdx();
+  for (const r of todosRegs().sort(porData)) { const I = idx[r.obra]; if (I) acumular(I, r) }
+  for (const o of S.obras) fechar(o, idx[o.id]);
+  if (S.hist) { const I = novoIdx(); [...S.hist.regs].sort(porData).forEach(r => acumular(I, r)); fechar(S.hist.obra, I); idx[S.hist.obra.id] = I }
   S.idx = idx;
 }
+const getObra = id => S.obras.find(x => x.id === id) || (S.hist && S.hist.obra.id === id ? S.hist.obra : null);
 function posObra(o) { if (o.lat != null && o.lon != null) return { lat: o.lat, lon: o.lon }; const I = S.idx[o.id]; return I && I.gps ? I.gps : null }
 function statusPoste(o, key) {
   const I = S.idx[o.id]; const st = I && I.postes.get(key); if (!st || !st.last) return '';
@@ -193,6 +236,11 @@ function statusPoste(o, key) {
 }
 const TIPO_TX = { conforme: 'Executado conforme projeto', alterado: 'Executado com alteração', nao: 'Não executado', novo: 'Poste não previsto' };
 const TIPO_CH = { conforme: 'ok', alterado: 'alt', nao: 'bad', novo: 'novo' };
+const TIPO_RET = { conforme: 'Retirado conforme projeto', alterado: 'Retirado com alteração', nao: 'Não retirado' };
+function tipoTx(o, r) {
+  const p = r.poste && String(r.poste).startsWith('P') ? (o.postes || []).find(x => 'P' + x.n === r.poste) : null;
+  return (p && p.acao === 'retirar' && TIPO_RET[r.tipo]) || TIPO_TX[r.tipo] || r.tipo;
+}
 const obrasVisiveis = () => S.divFiltro ? S.obras.filter(o => o.pref === S.divFiltro) : S.obras;
 
 function setSt(t, err) {
@@ -244,7 +292,7 @@ function vConta(app) {
    <div class="small muted" style="margin-top:6px">Versão do app ${VERSAO_APP}</div></div>`;
   $$('[data-sair]', app).forEach(b => b.onclick = () => {
     const s = sessDe(b.dataset.sair); if (S.fila.some(f => f.pref === s.pref) && !b.dataset.conf) { b.dataset.conf = 1; b.textContent = 'Há registros não enviados. Sair mesmo?'; return }
-    S.sess = S.sess.filter(x => x !== s); salvarSess(); IDB.del('cache:' + s.pref).catch(() => { });
+    S.sess = S.sess.filter(x => x !== s); salvarSess(); IDB.del('cache:' + s.pref).catch(() => { }); delete S.raw[s.pref];
     S.obras = S.obras.filter(o => o.pref !== s.pref); S.regs = S.regs.filter(r => r.pref !== s.pref); reindex(); route();
   });
   $('#maisdiv') && ($('#maisdiv').onclick = () => vLogin(app, true));
@@ -261,11 +309,13 @@ function route() {
   else if (h === 'conta') { S.view = 'conta'; S.mode = S.mode || (soCampo ? 'campo' : 'gestao') }
   else if (m || soCampo) { S.mode = 'campo'; S.view = m && m[2] ? 'fobra' : 'flist'; S.obraId = m && m[2] ? m[2] : null }
   else {
-    m = h.match(/^obra-(.+)$/);
+    m = h.match(/^obra-(.+)$/); const mh = h.match(/^hist-(.+)$/);
     if (m) { S.mode = 'gestao'; S.view = 'obra'; S.obraId = m[1] }
-    else if (['painel', 'obras', 'nova'].includes(h)) { S.mode = 'gestao'; S.view = h }
+    else if (mh) { S.mode = 'gestao'; S.view = 'hobra'; S.obraId = mh[1] }
+    else if (['painel', 'obras', 'nova', 'historico'].includes(h)) { S.mode = 'gestao'; S.view = h }
     else { S.mode = lsGet('fisc.modo', innerWidth < 760 ? 'campo' : 'gestao'); S.view = S.mode === 'campo' ? 'flist' : 'painel' }
   }
+  if (S.view !== 'hobra' && S.hist) { S.hist = null; reindex() }
   if (S.mode) lsSet('fisc.modo', S.mode);
   document.body.classList.toggle('campo', S.mode === 'campo' && S.view !== 'login');
   $('#topo').classList.toggle('hidden', S.view === 'login');
@@ -273,7 +323,7 @@ function route() {
   $$('.modesw button').forEach(b => b.classList.toggle('on', b.dataset.m === S.mode));
   $('#nav').classList.toggle('hidden', S.mode === 'campo' || S.view === 'conta');
   $('#navnova').classList.toggle('hidden', !souGestor());
-  $$('#nav a').forEach(a => a.classList.toggle('on', a.dataset.v === S.view || (S.view === 'obra' && a.dataset.v === 'obras')));
+  $$('#nav a').forEach(a => a.classList.toggle('on', a.dataset.v === S.view || (S.view === 'obra' && a.dataset.v === 'obras') || (S.view === 'hobra' && a.dataset.v === 'historico')));
   closeLayer(); render();
 }
 function go(h) { if (location.hash === '#' + h) route(); else location.hash = h }
@@ -285,13 +335,13 @@ let VIEWER = null;
 function render(fromData) {
   const app = $('#app');
   if (S.view === 'login') { vLogin(app); return }
-  if (fromData && (S.view === 'nova' || S.view === 'conta')) return;
+  if (fromData && (S.view === 'nova' || S.view === 'conta' || S.view === 'historico' || S.view === 'hobra')) return;
   if (fromData && S.view === 'fobra' && VIEWER && VIEWER.obraId === S.obraId) { VIEWER.refresh(); updFbot(); return }
   if (fromData && S.view === 'obra' && VIEWER && VIEWER.obraId === S.obraId) { VIEWER.refresh(); renderObraSide(); return }
   if (S.view === 'conta') { VIEWER = null; vConta(app); return }
   if (!S.carregado) { app.innerHTML = `<div class="empty">Carregando…</div>`; return }
   VIEWER = null;
-  ({ painel: vPainel, obras: vObras, nova: vNova, obra: vObra, flist: vFlist, fobra: vFobra }[S.view] || vPainel)(app);
+  ({ painel: vPainel, obras: vObras, nova: vNova, obra: vObra, flist: vFlist, fobra: vFobra, historico: vHistorico, hobra: vHObra }[S.view] || vPainel)(app);
 }
 function filtroDivHtml() {
   if (S.sess.length < 2) return '';
@@ -310,7 +360,7 @@ function vPainel(app) {
   app.innerHTML = `
   ${S.sess.length > 1 ? `<div class="toolbar">${filtroDivHtml()}</div>` : ''}
   <div class="grid k4">
-    <div class="kpi"><b>${ativas.length}</b><span>obras em andamento</span><small>${base.length} cadastradas</small></div>
+    <div class="kpi"><b>${ativas.length}</b><span>obras em andamento</span><small><a href="#historico" style="color:#8b97aa">${qtdHistorico()} concluídas no histórico</a></small></div>
     <div class="kpi"><b>${fmt(us)}</b><span>US empenhadas</span><small>obras em andamento</small></div>
     <div class="kpi"><b>${fmt(usE)}</b><span>US executadas (estim.)</span><small>${us ? fmt1(usE / us * 100) + '%' : '—'} · proporcional aos postes</small></div>
     <div class="kpi"><b>${fmt(pe)}<span style="display:inline;font-size:15px;color:#c7cfdb"> / ${fmt(pt)}</span></b><span>postes executados</span><small>${alt} com alteração · ${bad} não executados</small></div>
@@ -406,7 +456,7 @@ function vObras(app) {
     <input class="i" id="fq" placeholder="Buscar projeto, cliente, município…" value="${esc(FILT.q)}" style="min-width:240px">
     ${filtroDivHtml()}
     <select class="i" id="fe"><option value="">Todas as empreiteiras</option>${emps.map(e => `<option ${FILT.emp === e ? 'selected' : ''}>${esc(e)}</option>`).join('')}</select>
-    <select class="i" id="fs">${[['ativa', 'Em andamento'], ['concluida', 'Concluídas'], ['', 'Todas']].map(([v, t]) => `<option value="${v}" ${FILT.st === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
+    <a class="btn ghost sm" href="#historico" style="text-decoration:none">Ver concluídas (histórico)</a>
     <span style="flex:1"></span>${souGestor() ? `<a class="btn pri" href="#nova" style="text-decoration:none">+ Empenhar obra</a>` : ''}</div><div id="tb"></div></div>`;
   ligarFiltroDiv();
   const draw = () => {
@@ -422,7 +472,7 @@ function vObras(app) {
       : `<div class="empty">${base.length ? 'Nenhuma obra com esses filtros.' : 'Nenhuma obra cadastrada ainda.'}${souGestor() && !base.length ? ' <a href="#nova">Empenhar a primeira obra</a>.' : ''}</div>`;
     $$('[data-o]', app).forEach(el => el.onclick = () => go('obra-' + el.dataset.o));
   };
-  $('#fq').oninput = e => { FILT.q = e.target.value; draw() }; $('#fe').onchange = e => { FILT.emp = e.target.value; draw() }; $('#fs').onchange = e => { FILT.st = e.target.value; draw() };
+  $('#fq').oninput = e => { FILT.q = e.target.value; draw() }; $('#fe').onchange = e => { FILT.emp = e.target.value; draw() };
   draw();
 }
 
@@ -486,10 +536,10 @@ function plantaSrc(o) { return { src: driveImg(o.planta.id, Math.max(o.planta.w,
 /* ---------- detalhe da obra (gestão) ---------- */
 let SEL = null;
 function vObra(app) {
-  const o = S.obras.find(x => x.id === S.obraId);
+  const o = getObra(S.obraId); const hist = S.view === 'hobra';
   if (!o) { app.innerHTML = `<div class="card empty">Obra não encontrada. <a href="#obras">Voltar</a></div>`; return }
   SEL = null;
-  app.innerHTML = `<div class="toolbar"><a href="#obras" class="btn ghost sm" style="text-decoration:none">← Obras</a><h2 style="margin:0">Projeto ${esc(o.projeto)}</h2><span class="muted">${esc(o.descricao || '')}</span><span style="flex:1"></span>
+  app.innerHTML = `<div class="toolbar"><a href="#${hist ? 'historico' : 'obras'}" class="btn ghost sm" style="text-decoration:none">← ${hist ? 'Histórico' : 'Obras'}</a><h2 style="margin:0">Projeto ${esc(o.projeto)}</h2>${hist ? `<span class="chip ok">concluída ${dBR((o.concluidaEm || '').slice(0, 10))}</span>` : ''}<span class="muted">${esc(o.descricao || '')}</span><span style="flex:1"></span>
     <div class="legend"><span style="--c:var(--pend)">a executar</span><span style="--c:var(--ok)">conforme</span><span style="--c:var(--alt)">com alteração</span><span style="--c:var(--bad)">não executado</span><span style="--c:var(--novo)">não previsto</span><span class="small">▢ quadrado = retirar</span></div></div>
    <div class="det"><div id="vw"></div><div class="grid" id="side"></div></div>`;
   const ps = plantaSrc(o);
@@ -498,7 +548,7 @@ function vObra(app) {
   renderObraSide();
 }
 function renderObraSide() {
-  const o = S.obras.find(x => x.id === S.obraId); if (!o) return; const I = S.idx[o.id]; const side = $('#side'); if (!side) return;
+  const o = getObra(S.obraId); if (!o) return; const I = S.idx[o.id]; const side = $('#side'); if (!side) return; const hist = S.view === 'hobra';
   const regs = [...I.regs].filter(r => !SEL || (r.tipo === 'novo' ? 'N:' + r.id : r.poste) === SEL).reverse();
   const d = diasAte(o.prazo);
   side.innerHTML = `
@@ -514,19 +564,26 @@ function renderObraSide() {
     <b>OSE</b><span>${esc(o.ose || '—')}</span><b>Projetista</b><span>${esc(o.projetista || '—')}</span><b>Status</b><span>${o.status === 'concluida' ? '<span class="chip ok">concluída</span>' : '<span class="chip or">em andamento</span>'}</span>
    </div>
    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">${o.pdf ? `<a class="btn sm ghost" href="${esc(driveVer(o.pdf.id))}" target="_blank" rel="noopener" style="text-decoration:none">Abrir PDF do projeto</a>` : ''}
-    ${podeEditarObra(o) ? `<button class="btn sm ghost" id="edob">Editar dados</button><button class="btn sm ${o.status === 'concluida' ? 'ghost' : 'dk'}" id="conc">${o.status === 'concluida' ? 'Reabrir obra' : 'Marcar como concluída'}</button>` : ''}</div></div>
+    ${podeEditarObra(o) ? (hist ? `<button class="btn sm dk" id="reab">Reabrir obra</button>` : `<button class="btn sm ghost" id="edob">Editar dados</button><button class="btn sm dk" id="conc">Concluir obra</button>`) : ''}</div></div>
    <div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">${SEL ? esc(rotuloPoste(o, SEL)) : 'Registros de campo'}</h3>${SEL ? `<button class="btn sm ghost" id="clr">Ver todos</button>` : ''}</div>
    ${SEL && SEL.startsWith('P') ? (() => { const p = o.postes.find(p => 'P' + p.n === SEL); return p && (p.estruturas || []).length ? `<div style="margin:8px 0">${estHtml(p)}</div>` : p && p.nota ? `<div class="small muted" style="margin:6px 0">Previsto: ${esc(p.nota)}</div>` : '' })() : ''}
    <div class="feed" style="margin-top:8px">${regs.length ? regs.map(r => regHtml(o, r)).join('') : `<div class="muted small">${SEL ? 'Nenhum registro para este poste.' : 'Nenhum registro em campo ainda.'}</div>`}</div></div>`;
   $('#clr') && ($('#clr').onclick = () => { SEL = null; VIEWER.refresh(); renderObraSide() });
   $('#edob') && ($('#edob').onclick = () => editarObra(o));
-  $('#conc') && ($('#conc').onclick = async () => {
-    try { await api(sessObra(o), 'atualizarObra', { id: o.id, campos: { status: o.status === 'concluida' ? 'ativa' : 'concluida' } }); toast('Status atualizado'); sincronizar(true) } catch (e) { toast('Não foi possível salvar: ' + e.message, 1) }
+  $('#conc') && ($('#conc').onclick = async e => {
+    const b = e.currentTarget;
+    if (!b.dataset.conf) { b.dataset.conf = 1; b.textContent = 'Confirmar: concluir e mover para o Histórico'; b.style.background = 'var(--bad)'; return }
+    b.disabled = true; b.textContent = 'Concluindo…';
+    try { await api(sessObra(o), 'concluir', { id: o.id }); toast('Obra concluída e movida para o Histórico'); await sincronizar(); go('historico') } catch (err) { b.disabled = false; b.textContent = 'Concluir obra'; delete b.dataset.conf; toast('Não foi possível concluir: ' + err.message, 1) }
+  });
+  $('#reab') && ($('#reab').onclick = async e => {
+    const b = e.currentTarget; b.disabled = true; b.textContent = 'Reabrindo…';
+    try { await api(sessObra(o), 'reabrir', { id: o.id }); toast('Obra reaberta'); S.hist = null; await sincronizar(); go('obra-' + o.id) } catch (err) { b.disabled = false; b.textContent = 'Reabrir obra'; toast('Não foi possível reabrir: ' + err.message, 1) }
   });
   $$('.reg img', side).forEach(im => { imgFallback(im); im.onclick = () => lightbox(im.dataset.full, im.dataset.id) });
   $$('[data-inv]', side).forEach(b => b.onclick = async () => {
     const r = S.regs.find(x => x.id === b.dataset.inv); if (!r) return; b.disabled = true;
-    try { await api(sessObra(o), 'invalidar', { id: r.id, invalido: !r.invalido }); toast(r.invalido ? 'Registro restaurado' : 'Registro desconsiderado'); sincronizar(true) } catch (e) { b.disabled = false; toast('Não foi possível salvar: ' + e.message, 1) }
+    try { await api(sessObra(o), 'invalidar', { id: r.id, invalido: !r.invalido }); toast(r.invalido ? 'Registro restaurado' : 'Registro desconsiderado'); sincronizar() } catch (e) { b.disabled = false; toast('Não foi possível salvar: ' + e.message, 1) }
   });
   $$('[data-pk]', side).forEach(el => el.onclick = () => { SEL = el.dataset.pk; const m = markersObra(o).find(m => m.key === SEL); m && VIEWER.focus(m.x, m.y); VIEWER.refresh(); renderObraSide() });
 }
@@ -535,11 +592,11 @@ function regHtml(o, r) {
   const gm = r.gps && r.gps.lat != null ? `<a href="https://www.google.com/maps?q=${r.gps.lat},${r.gps.lon}" target="_blank" rel="noopener">GPS${r.gps.origem === 'foto' ? ' (foto)' : ''}</a>` : '<span title="Sem localização">sem GPS</span>';
   const img = r.foto ? (r.foto.local ? `<img src="${esc(r.foto.local)}" data-full="${esc(r.foto.local)}">` : `<img src="${esc(driveImg(r.foto.id, 200))}" data-id="${esc(r.foto.id)}" data-w="200" data-full="${esc(driveImg(r.foto.id, 1600))}" loading="lazy">`) : `<div class="nf">sem foto</div>`;
   return `<div class="reg ${r.invalido ? 'inv' : ''}">${img}
-   <div style="flex:1;min-width:0"><div><b data-pk="${esc(key)}" style="cursor:pointer">${esc(rotuloPoste(o, key))}</b> <span class="chip ${TIPO_CH[r.tipo] || ''}">${esc(TIPO_TX[r.tipo] || r.tipo)}</span>${r.invalido ? ' <span class="chip">desconsiderado</span>' : ''}${r.pendente ? ' <span class="chip">aguardando envio</span>' : ''}</div>
+   <div style="flex:1;min-width:0"><div><b data-pk="${esc(key)}" style="cursor:pointer">${esc(rotuloPoste(o, key))}</b> <span class="chip ${TIPO_CH[r.tipo] || ''}">${esc(tipoTx(o, r))}</span>${r.invalido ? ' <span class="chip">desconsiderado</span>' : ''}${r.pendente ? ' <span class="chip">aguardando envio</span>' : ''}</div>
    ${r.alt && r.alt.length ? `<div class="small" style="margin-top:3px">${esc(r.alt.join(' · '))}</div>` : ''}
    ${r.obs ? `<div class="small" style="margin-top:3px">“${esc(r.obs)}”</div>` : ''}
    <div class="small muted" style="margin-top:3px">Execução ${dBR(r.dataExec)} · ${esc(r.equipe || '')}${r.empresa ? ' (' + esc(r.empresa) + ')' : ''} · lançado ${dtBR(r.em)} · ${gm}</div>
-   ${podeInvalidar(o) && !r.pendente ? `<button class="btn sm ghost" style="margin-top:6px" data-inv="${esc(r.id)}">${r.invalido ? 'Restaurar' : 'Desconsiderar'}</button>` : ''}</div></div>`;
+   ${podeInvalidar(o) && !r.pendente && S.view !== 'hobra' ? `<button class="btn sm ghost" style="margin-top:6px" data-inv="${esc(r.id)}">${r.invalido ? 'Restaurar' : 'Desconsiderar'}</button>` : ''}</div></div>`;
 }
 function lightbox(src, id) {
   openLayer(`<div class="ov" id="lb"><img class="big" src="${esc(src)}" ${id ? `data-id="${esc(id)}" data-w="1600"` : ''}></div>`);
@@ -583,8 +640,43 @@ function editarObra(o) {
   $('#ok').onclick = async () => {
     const v = lerForm($('#ef')); delete v.projeto;
     if (v.municipio && v.municipio !== o.municipio && o.locOrigem !== 'utm') { const c = PRMAP.c.find(z => z[0] === v.municipio); if (c) { v.lat = c[1]; v.lon = c[2]; v.locOrigem = 'municipio' } }
-    try { $('#ok').disabled = true; await api(sessObra(o), 'atualizarObra', { id: o.id, campos: v }); closeLayer(); toast('Dados salvos'); sincronizar(true) } catch (e) { $('#ok').disabled = false; toast('Não foi possível salvar: ' + e.message, 1) }
+    try { $('#ok').disabled = true; await api(sessObra(o), 'atualizarObra', { id: o.id, campos: v }); closeLayer(); toast('Dados salvos'); sincronizar() } catch (e) { $('#ok').disabled = false; toast('Não foi possível salvar: ' + e.message, 1) }
   };
+}
+
+/* ================= histórico (obras concluídas) ================= */
+async function vHistorico(app) {
+  app.innerHTML = `<div class="card"><div class="toolbar"><h2 style="margin:0 12px 0 0">Histórico · obras concluídas</h2>
+    <input class="i" id="hq" placeholder="Buscar projeto, cliente, município…" style="min-width:240px">${filtroDivHtml()}</div><div id="htb"><div class="empty">Carregando…</div></div></div>`;
+  ligarFiltroDiv();
+  const L = []; let erro = '';
+  for (const s of S.sess) {
+    if (S.divFiltro && s.pref !== S.divFiltro) continue;
+    try { const j = await api(s, 'historico'); (j.obras || []).forEach(o => L.push(Object.assign({}, o, { pref: s.pref }))) }
+    catch (e) { erro = e.rede ? 'Sem conexão: o histórico precisa de internet.' : e.message }
+  }
+  if (S.view !== 'historico') return;
+  S.histLista = L;
+  const draw = () => {
+    const q = ($('#hq').value || '').toLowerCase();
+    const V = L.filter(o => !q || [o.projeto, o.cliente, o.descricao, o.municipio, o.empreiteira, o.aes].join(' ').toLowerCase().includes(q)).sort((a, b) => String(b.concluidaEm).localeCompare(String(a.concluidaEm)));
+    $('#htb').innerHTML = erro && !L.length ? `<div class="empty">${esc(erro)}</div>` : V.length ? `<div style="overflow:auto"><table><thead><tr><th>Projeto</th><th>Obra / cliente</th>${S.sess.length > 1 ? '<th>Divisão</th>' : ''}<th>Município</th><th>Empreiteira</th><th class="n">US</th><th class="n">US exec.</th><th class="n">Postes</th><th class="n">Alter.</th><th class="n">Não exec.</th><th>Concluída em</th></tr></thead><tbody>${V.map(o => {
+      const r = o.resumo || {}; return `<tr class="cl" data-h="${esc(o.id)}"><td><b>${esc(o.projeto)}</b></td><td>${esc(o.descricao || '')}<div class="small muted">${esc(o.cliente || '')}</div></td>${S.sess.length > 1 ? `<td>${esc((sessDe(o.pref) || {}).div || '')}</td>` : ''}<td>${esc(o.municipio || '—')}</td><td>${esc(o.empreiteira || '—')}</td><td class="n">${fmt(o.us)}</td><td class="n">${fmt(r.usExec)}</td><td class="n">${r.exec ?? '—'}/${r.tot ?? '—'}</td><td class="n">${r.alt ?? '—'}</td><td class="n">${r.bad ?? '—'}</td><td>${dBR(String(o.concluidaEm || '').slice(0, 10))}</td></tr>`
+    }).join('')}</tbody></table></div>` : `<div class="empty">Nenhuma obra concluída${q ? ' com essa busca' : ' ainda'}.</div>`;
+    $$('[data-h]', app).forEach(el => el.onclick = () => go('hist-' + el.dataset.h));
+  };
+  $('#hq').oninput = draw; draw();
+}
+async function vHObra(app) {
+  app.innerHTML = `<div class="empty">Carregando obra do histórico…</div>`;
+  const id = S.obraId; const item = (S.histLista || []).find(x => x.id === id);
+  const lista = item && sessDe(item.pref) ? [sessDe(item.pref)] : S.sess;
+  let got = null, erro = '';
+  for (const s of lista) { try { const j = await api(s, 'obraHistorico', { id }); got = { pref: s.pref, j }; break } catch (e) { erro = e.rede ? 'Sem conexão: o histórico precisa de internet.' : e.message } }
+  if (S.view !== 'hobra' || S.obraId !== id) return;
+  if (!got) { app.innerHTML = `<div class="card empty">${esc(erro || 'Obra não encontrada no histórico.')} <a href="#historico">Voltar</a></div>`; return }
+  const n = normalizar(got.pref, { obras: [got.j.obra], registros: got.j.registros });
+  S.hist = { obra: n.obras[0], regs: n.regs }; reindex(); vObra(app);
 }
 
 /* ================= empenhar obra ================= */
@@ -700,7 +792,7 @@ async function salvarNova() {
     const obra = Object.assign({}, v, { postes: N.postes.map(p => ({ n: p.n, x: p.x, y: p.y, nota: p.nota || '', acao: p.acao || '', estruturas: p.estruturas || [] })), lat: loc ? loc.lat : '', lon: loc ? loc.lon : '', locOrigem: loc ? loc.src : '' });
     const j = await api(s, 'empenhar', { obra, planta: { b64: plantaB64, w: N.w, h: N.h }, pdf: pdfB64 ? { b64: pdfB64, nome: N.file.name } : null });
     toast('Obra empenhada'); NOVA = null;
-    await sincronizar(true); go('obra-' + j.id);
+    await sincronizar(); go('obra-' + j.id);
   } catch (e) { console.error(e); btn.disabled = false; sst.textContent = ''; toast(e.rede ? 'Sem conexão. Tente de novo.' : 'Não foi possível salvar: ' + e.message, 1) }
 }
 
@@ -774,7 +866,7 @@ function abrirPoste(o, key, novoPos) {
   openLayer(`<div class="ov" id="shov" style="align-items:flex-end;padding:0"><div class="sheet" style="position:relative;width:100%"><div class="grab"></div>
     <div style="display:flex;justify-content:space-between;align-items:center"><h4>${esc(titulo)}</h4><button class="btn sm ghost" id="shx">Fechar</button></div>
     ${(pp.estruturas || []).length ? `<div style="margin-top:8px">${estHtml(pp)}</div>` : prev ? `<div class="small" style="margin-top:6px;background:#f4f6f9;border-radius:8px;padding:8px">Previsto: ${esc(prev)}</div>` : ''}
-    ${st && st.last ? `<div class="small" style="margin-top:6px">Situação atual: <span class="chip ${TIPO_CH[st.last.tipo]}">${esc(TIPO_TX[st.last.tipo])}</span>${st.last.pendente ? ' <span class="chip">aguardando envio</span>' : ''}</div>` : ''}
+    ${st && st.last ? `<div class="small" style="margin-top:6px">Situação atual: <span class="chip ${TIPO_CH[st.last.tipo]}">${esc(tipoTx(o, st.last))}</span>${st.last.pendente ? ' <span class="chip">aguardando envio</span>' : ''}</div>` : ''}
     ${novo ? `<div class="small muted" style="margin-top:6px">Registre o poste implantado fora do projeto. Descreva o que foi feito e tire a foto.</div>` : `
     <div class="bigbtns"><button class="b1" data-t="conforme">✅ ${ret ? 'Retirado' : 'Executado'} conforme projeto</button><button class="b2" data-t="alterado">✏️ ${ret ? 'Retirado' : 'Executado'} com alteração</button><button class="b3" data-t="nao">⛔ ${ret ? 'Não retirado' : 'Não executado'}</button></div>`}
     <div id="dyn"></div>
@@ -783,7 +875,7 @@ function abrirPoste(o, key, novoPos) {
     <div class="photo"><img id="fprev" class="hidden"><label><input type="file" accept="image/*" capture="environment" id="ffoto" class="hidden">📷 <span id="flbl">Tirar foto</span></label></div>
     <div class="small muted" id="fgps2" style="margin-top:6px">Buscando GPS do celular…</div>
     <button class="btn pri" id="shok" style="width:100%;margin-top:16px;padding:14px;font-size:15px" disabled>Salvar registro</button>
-    ${st && st.hist.length ? `<div class="hist"><b class="small">Histórico</b>${[...st.hist].reverse().map(r => `<div>${dtBR(r.em)} · ${esc(TIPO_TX[r.tipo])} · ${esc(r.equipe || '')}${r.alt && r.alt.length ? ' · ' + esc(r.alt.join(', ')) : ''}</div>`).join('')}</div>` : ''}
+    ${st && st.hist.length ? `<div class="hist"><b class="small">Histórico</b>${[...st.hist].reverse().map(r => `<div>${dtBR(r.em)} · ${esc(tipoTx(o, r))} · ${esc(r.equipe || '')}${r.alt && r.alt.length ? ' · ' + esc(r.alt.join(', ')) : ''}</div>`).join('')}</div>` : ''}
   </div></div>`);
   $('#shx').onclick = closeLayer; $('#shov').onclick = e => { if (e.target.id === 'shov') closeLayer() };
   const dyn = $('#dyn'); const LY = $('#layer');
@@ -826,7 +918,7 @@ function abrirPoste(o, key, novoPos) {
       await api(s, 'registrar', { registro: reg, foto: fotoB64 ? { b64: fotoB64 } : null });
       await IDB.del('fila:' + reg.id).catch(() => { });
       S.fila = S.fila.filter(x => x.registro.id !== reg.id);
-      toast('Registro salvo'); sincronizar(true);
+      toast('Registro salvo'); sincronizar();
     } catch (e) {
       if (e.rede) { toast('Sem sinal: registro guardado no celular e será enviado sozinho.'); setSt('sem conexão', true) }
       else { await IDB.del('fila:' + reg.id).catch(() => { }); S.fila = S.fila.filter(x => x.registro.id !== reg.id); reindex(); render(true); toast('Não foi possível salvar: ' + e.message, 1) }
@@ -860,10 +952,10 @@ async function prepFoto(file){
   const buf=await file.arrayBuffer();const ex=lerExif(buf);
   const url=URL.createObjectURL(file);
   const img=await new Promise((ok,ko)=>{const i=new Image();i.onload=()=>ok(i);i.onerror=()=>ko(new Error('imagem inválida'));i.src=url});
-  const mx=1600,s=Math.min(1,mx/Math.max(img.naturalWidth,img.naturalHeight));
+  const mx=1280,s=Math.min(1,mx/Math.max(img.naturalWidth,img.naturalHeight));
   const cv=document.createElement('canvas');cv.width=Math.round(img.naturalWidth*s);cv.height=Math.round(img.naturalHeight*s);
   cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);URL.revokeObjectURL(url);
-  const blob=await new Promise(r=>cv.toBlob(r,'image/jpeg',.82));
+  const blob=await new Promise(r=>cv.toBlob(r,'image/jpeg',.78));
   return {blob,gps:ex.gps||null,data:ex.data||null};
 }
 
@@ -1028,11 +1120,8 @@ function mostrarInstalar(el) {
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
 (async () => {
   // mostra o que já está no aparelho, depois atualiza
-  for (const s of S.sess) {
-    const c = await IDB.get('cache:' + s.pref).catch(() => null);
-    if (c) { const n = normalizar(s.pref, c); S.obras.push(...n.obras); S.regs.push(...n.regs); if (Array.isArray(c.empreiteiras)) S.emps[s.pref] = c.empreiteiras; S.carregado = true }
-  }
-  await carregarFila(); reindex();
+  for (const s of S.sess) { const raw = await carregarRaw(s.pref); if (raw.desde || Object.keys(raw.obras).length) S.carregado = true }
+  montar(); await carregarFila(); reindex();
   route();
   if (S.sess.length) { await sincronizar(); enviarFila() }
 })();
