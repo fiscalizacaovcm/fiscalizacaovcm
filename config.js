@@ -5,7 +5,7 @@
  * Os códigos de acesso NUNCA vão neste arquivo: eles ficam só na aba "chaves" de cada planilha. */
 window.FISC_CONFIG = {
   divisoes: {
-    CEP: { sigla: 'VCMCEP', url: '' },
+    CEP: { sigla: 'VCMCEP', url: 'https://script.google.com/macros/s/AKfycbwYCXl7CD2OzPbHN8t-toJAg4qtsmlmwYrU_SiLohclIwZTQVC3YpptUjvkjaM-QbbL0A/exec' },
     SUL: { sigla: 'VCMSUL', url: '' },
     MSL: { sigla: 'VCMMSL', url: '' },
     CMN: { sigla: 'VCMCMN', url: '' }
