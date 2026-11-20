@@ -1,7 +1,7 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.0.0';
+const VERSAO_APP = '1.1.0';
 const LIB = {
   pdf: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   pdfw: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
@@ -12,7 +12,7 @@ const PRMAP = window.PRMAP;
 
 /* ================= estado ================= */
 const S = {
-  sess: lsGet('fisc.sess', []), obras: [], regs: [], fila: [], idx: {}, carregado: false, carregando: false, ultimaSync: null,
+  sess: lsGet('fisc.sess', []), obras: [], regs: [], emps: {}, fila: [], idx: {}, carregado: false, carregando: false, ultimaSync: null,
   mode: null, view: 'painel', obraId: null, nome: lsGet('fisc.nome', ''), verTodas: lsGet('fisc.todas', false), mapZoom: 'obras', divFiltro: ''
 };
 function lsGet(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v) } catch (e) { return d } }
@@ -96,12 +96,13 @@ async function sincronizar(silencioso) {
       const d = await api(s, 'dados');
       const n = normalizar(s.pref, d);
       obras.push(...n.obras); regs.push(...n.regs);
-      IDB.set('cache:' + s.pref, { obras: d.obras, registros: d.registros, em: new Date().toISOString() }).catch(() => { });
+      if (Array.isArray(d.empreiteiras)) S.emps[s.pref] = d.empreiteiras;
+      IDB.set('cache:' + s.pref, { obras: d.obras, registros: d.registros, empreiteiras: d.empreiteiras || null, em: new Date().toISOString() }).catch(() => { });
     } catch (e) {
       if (e.codigo === 'chave') { toast(`O código da ${s.div} foi bloqueado ou removido.`, 1); S.sess = S.sess.filter(x => x !== s); salvarSess(); continue }
       falhou++;
       const c = await IDB.get('cache:' + s.pref).catch(() => null);
-      if (c) { const n = normalizar(s.pref, c); obras.push(...n.obras); regs.push(...n.regs) }
+      if (c) { const n = normalizar(s.pref, c); obras.push(...n.obras); regs.push(...n.regs); if (Array.isArray(c.empreiteiras)) S.emps[s.pref] = c.empreiteiras }
     }
   }
   S.obras = obras; S.regs = regs; S.carregado = true; S.carregando = false;
@@ -542,6 +543,19 @@ function lightbox(src, id) {
 function openLayer(h) { $('#layer').innerHTML = h }
 function closeLayer() { $('#layer').innerHTML = '' }
 
+
+/* lista de empreiteiras: vem da aba "chaves" da divisão; sem ela, campo de texto */
+function empCampoHtml(pref, atual, emps) {
+  const lista = S.emps[pref];
+  if (!Array.isArray(lista)) return `<input class="i" name="empreiteira" list="dlemp" value="${esc(atual || '')}" placeholder="Igual ao nome da empresa na aba chaves"><datalist id="dlemp">${(emps || []).map(e => `<option value="${esc(e)}">`).join('')}</datalist>`;
+  const ops = [...lista]; if (atual && !ops.includes(atual)) ops.unshift(atual);
+  if (!ops.length) return `<select class="i" name="empreiteira" disabled><option value="">Nenhuma empreiteira cadastrada</option></select><div class="small muted" style="margin-top:4px">Cadastre na aba <b>chaves</b> da planilha (papel = empreiteira) e sincronize.</div>`;
+  return `<select class="i" name="empreiteira"><option value="">Selecione…</option>${ops.map(e => `<option ${e === atual ? 'selected' : ''}>${esc(e)}</option>`).join('')}</select>`;
+}
+function ligarTrocaDivisao(root) {
+  const sel = $('[name=pref]', root); if (!sel) return;
+  sel.onchange = () => { const box = $('#empbox', root); if (box) box.innerHTML = empCampoHtml(sel.value, '', []) };
+}
 function formCampos(o, emps, divs) {
   return `${divs && divs.length > 1 ? `<label class="f">Divisão</label><select class="i" name="pref">${divs.map(s => `<option value="${esc(s.pref)}" ${o.pref === s.pref ? 'selected' : ''}>${esc(s.div)}</option>`).join('')}</select>` : ''}
    <div class="row2"><div><label class="f">Projeto</label><input class="i" name="projeto" value="${esc(o.projeto || '')}"></div><div><label class="f">OSE</label><input class="i" name="ose" value="${esc(o.ose || '')}"></div></div>
@@ -551,8 +565,7 @@ function formCampos(o, emps, divs) {
    <div class="row2"><div><label class="f">Município</label><input class="i" name="municipio" list="dlmun" value="${esc(o.municipio || '')}"></div><div><label class="f">Projetista</label><input class="i" name="projetista" value="${esc(o.projetista || '')}"></div></div>
    <datalist id="dlmun">${PRMAP.c.map(c => `<option value="${esc(c[0])}">`).join('')}</datalist>
    <div style="border-top:1px solid var(--ln);margin:14px 0 2px"></div>
-   <label class="f">Empreiteira *</label><input class="i" name="empreiteira" list="dlemp" value="${esc(o.empreiteira || '')}" placeholder="Igual ao nome da empresa na aba chaves">
-   <datalist id="dlemp">${emps.map(e => `<option value="${esc(e)}">`).join('')}</datalist>
+   <label class="f">Empreiteira *</label><div id="empbox">${empCampoHtml(o.pref || (divs && divs[0] && divs[0].pref), o.empreiteira, emps)}</div>
    <div class="row2"><div><label class="f">AES</label><input class="i" name="aes" value="${esc(o.aes || '')}"></div><div><label class="f">US *</label><input class="i" name="us" type="number" min="0" step="1" value="${o.us ?? ''}"></div></div>
    <div class="row2"><div><label class="f">Data do empenho</label><input class="i" name="empenhoEm" type="date" value="${esc(o.empenhoEm || hoje())}"></div><div><label class="f">Prazo de execução</label><input class="i" name="prazo" type="date" value="${esc(o.prazo || '')}"></div></div>`;
 }
@@ -654,6 +667,7 @@ function editorNova() {
   $('#vol').onclick = () => vNova(app);
   $('#add').onclick = () => ed.setPlacing(!ed.placing, 'Clique na planta onde fica o novo poste');
   $('#ren').onclick = () => { N.postes.sort((a, b) => a.n - b.n).forEach((p, i) => p.n = i + 1); N.sel = null; ed.refresh(); side(); toast('Postes renumerados de 1 a ' + N.postes.length) };
+  ligarTrocaDivisao($('#nf'));
   $('#salvar').onclick = salvarNova;
 }
 async function salvarNova() {
@@ -911,7 +925,7 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.se
   // mostra o que já está no aparelho, depois atualiza
   for (const s of S.sess) {
     const c = await IDB.get('cache:' + s.pref).catch(() => null);
-    if (c) { const n = normalizar(s.pref, c); S.obras.push(...n.obras); S.regs.push(...n.regs); S.carregado = true }
+    if (c) { const n = normalizar(s.pref, c); S.obras.push(...n.obras); S.regs.push(...n.regs); if (Array.isArray(c.empreiteiras)) S.emps[s.pref] = c.empreiteiras; S.carregado = true }
   }
   await carregarFila(); reindex();
   route();

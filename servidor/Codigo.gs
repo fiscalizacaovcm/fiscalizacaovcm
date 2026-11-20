@@ -7,7 +7,7 @@
  * Para atualizar o código depois: Implantar > Gerenciar implantações > ✏️ > Nova versão.
  * NUNCA use "Nova implantação" de novo, porque o endereço muda e o app perde a conexão.
  */
-const VERSAO_SERVIDOR = '1.0';
+const VERSAO_SERVIDOR = '1.1';
 
 const ABAS = {
   obras: ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us',
@@ -157,7 +157,21 @@ function dados(p) {
     r.invalido = r.invalido === 'SIM';
     r.gps = (r.lat !== '' && r.lat != null && r.lon !== '' && r.lon != null) ? { lat: r.lat, lon: r.lon, origem: r.gpsOrigem, precisao: r.precisao } : null;
   });
-  return { ok: true, divisao: lerConfig().divisao, obras: obras, registros: regs, agora: agoraIso() };
+  const out = { ok: true, divisao: lerConfig().divisao, obras: obras, registros: regs, agora: agoraIso() };
+  if (p.papel !== 'empreiteira') out.empreiteiras = listaEmpreiteiras();
+  return out;
+}
+
+/** Empreiteiras ativas da aba "chaves" (papel = empreiteira), para a lista do empenho. */
+function listaEmpreiteiras() {
+  const sh = aba('chaves');
+  if (!sh || sh.getLastRow() < 2) return [];
+  const vistos = {};
+  sh.getRange(2, 1, sh.getLastRow() - 1, 5).getValues().forEach(function (r) {
+    const ativa = String(r[4]).toUpperCase();
+    if (String(r[1]).toLowerCase() === 'empreiteira' && r[2] && ativa !== 'NÃO' && ativa !== 'NAO') vistos[String(r[2]).trim()] = 1;
+  });
+  return Object.keys(vistos).sort(function (x, y) { return x.localeCompare(y, 'pt-BR'); });
 }
 
 function empenhar(p, req) {
