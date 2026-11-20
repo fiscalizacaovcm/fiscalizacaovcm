@@ -1,7 +1,7 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.1.0';
+const VERSAO_APP = '1.2.0';
 const LIB = {
   pdf: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   pdfw: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
@@ -470,8 +470,13 @@ function Viewer(host,{img,imgAlt,iw,ih,getMarkers,onMarker,onPlace,editable,onMo
   draw();
   return {refresh:draw,fit,focus,setPlacing(v,hint){placing=v;host.classList.toggle('placing',v);$('.hint',host)?.remove();if(v&&hint){const h=document.createElement('div');h.className='hint';h.textContent=hint;host.appendChild(h)}},get placing(){return placing}};
 }
+function estHtml(p) {
+  const e = p.estruturas || []; if (!e.length) return '';
+  const ins = e.filter(x => !x.r), ret = e.filter(x => x.r);
+  return `<div class="est">${ins.length ? `<div><span class="lbl ok">Instalar</span>${ins.map(x => `<span class="tag">${esc(x.t)}</span>`).join('')}</div>` : ''}${ret.length ? `<div><span class="lbl bad">Retirar</span>${ret.map(x => `<span class="tag r">${esc(x.t)}</span>`).join('')}</div>` : ''}</div>`;
+}
 function markersObra(o, sel) {
-  const L = (o.postes || []).map(p => ({ key: 'P' + p.n, label: String(p.n), x: p.x, y: p.y, cls: statusPoste(o, 'P' + p.n) + (sel === 'P' + p.n ? ' sel' : '') }));
+  const L = (o.postes || []).map(p => ({ key: 'P' + p.n, label: String(p.n), x: p.x, y: p.y, cls: statusPoste(o, 'P' + p.n) + (p.acao === 'retirar' ? ' ret' : '') + (sel === 'P' + p.n ? ' sel' : '') }));
   const I = S.idx[o.id]; (I ? I.novos : []).forEach((n, i) => L.push({ key: n.key, label: '+' + (i + 1), x: n.x, y: n.y, cls: statusPoste(o, n.key) + (sel === n.key ? ' sel' : '') }));
   return L;
 }
@@ -485,7 +490,7 @@ function vObra(app) {
   if (!o) { app.innerHTML = `<div class="card empty">Obra não encontrada. <a href="#obras">Voltar</a></div>`; return }
   SEL = null;
   app.innerHTML = `<div class="toolbar"><a href="#obras" class="btn ghost sm" style="text-decoration:none">← Obras</a><h2 style="margin:0">Projeto ${esc(o.projeto)}</h2><span class="muted">${esc(o.descricao || '')}</span><span style="flex:1"></span>
-    <div class="legend"><span style="--c:var(--pend)">a executar</span><span style="--c:var(--ok)">conforme</span><span style="--c:var(--alt)">com alteração</span><span style="--c:var(--bad)">não executado</span><span style="--c:var(--novo)">não previsto</span></div></div>
+    <div class="legend"><span style="--c:var(--pend)">a executar</span><span style="--c:var(--ok)">conforme</span><span style="--c:var(--alt)">com alteração</span><span style="--c:var(--bad)">não executado</span><span style="--c:var(--novo)">não previsto</span><span class="small">▢ quadrado = retirar</span></div></div>
    <div class="det"><div id="vw"></div><div class="grid" id="side"></div></div>`;
   const ps = plantaSrc(o);
   VIEWER = Viewer($('#vw'), { img: ps.src, imgAlt: ps.alt, iw: o.planta.w, ih: o.planta.h, fitMarkers: true, getMarkers: () => markersObra(o, SEL), onMarker: k => { SEL = k; VIEWER.refresh(); renderObraSide() } });
@@ -511,7 +516,7 @@ function renderObraSide() {
    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">${o.pdf ? `<a class="btn sm ghost" href="${esc(driveVer(o.pdf.id))}" target="_blank" rel="noopener" style="text-decoration:none">Abrir PDF do projeto</a>` : ''}
     ${podeEditarObra(o) ? `<button class="btn sm ghost" id="edob">Editar dados</button><button class="btn sm ${o.status === 'concluida' ? 'ghost' : 'dk'}" id="conc">${o.status === 'concluida' ? 'Reabrir obra' : 'Marcar como concluída'}</button>` : ''}</div></div>
    <div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">${SEL ? esc(rotuloPoste(o, SEL)) : 'Registros de campo'}</h3>${SEL ? `<button class="btn sm ghost" id="clr">Ver todos</button>` : ''}</div>
-   ${SEL && SEL.startsWith('P') ? (() => { const p = o.postes.find(p => 'P' + p.n === SEL); return p && p.nota ? `<div class="small muted" style="margin:6px 0">Previsto: ${esc(p.nota)}</div>` : '' })() : ''}
+   ${SEL && SEL.startsWith('P') ? (() => { const p = o.postes.find(p => 'P' + p.n === SEL); return p && (p.estruturas || []).length ? `<div style="margin:8px 0">${estHtml(p)}</div>` : p && p.nota ? `<div class="small muted" style="margin:6px 0">Previsto: ${esc(p.nota)}</div>` : '' })() : ''}
    <div class="feed" style="margin-top:8px">${regs.length ? regs.map(r => regHtml(o, r)).join('') : `<div class="muted small">${SEL ? 'Nenhum registro para este poste.' : 'Nenhum registro em campo ainda.'}</div>`}</div></div>`;
   $('#clr') && ($('#clr').onclick = () => { SEL = null; VIEWER.refresh(); renderObraSide() });
   $('#edob') && ($('#edob').onclick = () => editarObra(o));
@@ -610,7 +615,9 @@ async function processarPdf(file) {
     const vp1 = page.getViewport({ scale: 1 });
     const tc = await page.getTextContent();
     const items = tc.items.map(i => { const [a, b, , , e, g] = i.transform; const [x, y] = vp1.convertToViewportPoint(e, g); const L = Math.hypot(a, b) || 1; const [x2] = vp1.convertToViewportPoint(e + i.width * a / L, g + i.width * b / L); return { str: i.str, x: Math.min(x, x2), y, w: Math.abs(x2 - x) || i.width, h: L } });
-    const R = analisarTexto(items, vp1.width, vp1.height, PRMAP.c.map(c => c[0]));
+    st('Procurando os postes no desenho…');
+    let geo = null; try { geo = geometriaPdf(await page.getOperatorList(), vp1, lib.OPS) } catch (e) { console.warn('geometria', e) }
+    const R = analisarTexto(items, vp1.width, vp1.height, PRMAP.c.map(c => c[0]), geo);
     st('Gerando a imagem da planta…');
     const scale = Math.min(3, 2600 / Math.max(vp1.width, vp1.height));
     const vp = page.getViewport({ scale }); const cv = document.createElement('canvas'); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
@@ -619,9 +626,10 @@ async function processarPdf(file) {
     const png = await new Promise(r => cv.toBlob(r, 'image/jpeg', .88));
     let loc = null;
     if (R.utm) { const ll = utmToLatLon(R.utm.e, R.utm.n); if (ll.lat < -22 && ll.lat > -27 && ll.lon < -48 && ll.lon > -55) loc = { lat: +ll.lat.toFixed(6), lon: +ll.lon.toFixed(6), src: 'utm' } }
+    if (!loc && R.ll) loc = { lat: +R.ll.lat.toFixed(6), lon: +R.ll.lon.toFixed(6), src: 'coordenada' };
     if (!loc && R.municipio) { const c = PRMAP.c.find(z => z[0] === R.municipio); loc = { lat: c[1], lon: c[2], src: 'municipio' } }
     const divs = S.sess.filter(s => s.papel === 'gestor');
-    NOVA = { file, png, url: URL.createObjectURL(png), w: cv.width, h: cv.height, postes: R.postes.map(p => ({ ...p, nota: '' })), campos: { ...R.campos, municipio: R.municipio, empenhoEm: hoje(), pref: S.divFiltro && divs.some(s => s.pref === S.divFiltro) ? S.divFiltro : divs[0].pref }, loc, utm: R.utm, sel: null, divs };
+    NOVA = { file, png, url: URL.createObjectURL(png), w: cv.width, h: cv.height, postes: R.postes.map(p => ({ ...p, nota: p.nota || '', acao: p.acao || '', estruturas: p.estruturas || [] })), campos: { ...R.campos, municipio: R.municipio, empenhoEm: hoje(), pref: S.divFiltro && divs.some(s => s.pref === S.divFiltro) ? S.divFiltro : divs[0].pref }, loc, utm: R.utm, sel: null, divs };
     editorNova();
   } catch (e) { console.error(e); st('Não consegui ler este PDF: ' + (e.message || e)); toast('Erro ao ler o PDF', 1) }
 }
@@ -637,29 +645,32 @@ function editorNova() {
     <div class="plist" id="plist"></div>
     <div id="psel"></div>
     ${ja ? `<div class="note" style="margin-top:10px">Já existe uma obra com o projeto ${esc(ja.projeto)}. Salvar vai criar outra obra separada.</div>` : ''}
-    <div class="note" style="margin-top:10px;background:#f4f6f9;border-color:var(--ln);color:var(--tx)">Localização: ${N.loc ? (N.loc.src === 'utm' ? `coordenada UTM do desenho (${fmt1(N.utm.e)}, ${fmt1(N.utm.n)})` : `centro do município de ${esc(N.campos.municipio)}`) : 'não encontrada no PDF. Informe o município ou ela virá do GPS dos registros.'}</div>
+    <div class="note" style="margin-top:10px;background:#f4f6f9;border-color:var(--ln);color:var(--tx)">Localização: ${N.loc ? (N.loc.src === 'utm' ? `coordenada UTM do desenho (${fmt1(N.utm.e)}, ${fmt1(N.utm.n)})` : N.loc.src === 'coordenada' ? `coordenada do desenho (${N.loc.lat}, ${N.loc.lon})` : `centro do município de ${esc(N.campos.municipio)}`) : 'não encontrada no PDF. Informe o município ou ela virá do GPS dos registros.'}</div>
     <div id="nf">${formCampos(N.campos, emps, N.divs)}</div>
     <button class="btn pri" id="salvar" style="width:100%;margin-top:16px;padding:12px">Empenhar obra</button>
     <div class="small muted" id="sst" style="margin-top:8px"></div>
    </div></div>`;
   const ed = Viewer($('#vw'), {
     img: N.url, iw: N.w, ih: N.h, editable: true,
-    getMarkers: () => N.postes.map(p => ({ key: String(p.n), label: String(p.n), x: p.x, y: p.y, cls: 'ed' + (N.sel === p.n ? ' sel' : '') })),
+    getMarkers: () => N.postes.map(p => ({ key: String(p.n), label: String(p.n), x: p.x, y: p.y, cls: 'ed' + (p.acao === 'retirar' ? ' ret' : '') + (N.sel === p.n ? ' sel' : '') })),
     onMarker: k => { N.sel = +k; ed.refresh(); side() },
     onMove: (k, p) => { const q = N.postes.find(x => x.n === +k); q.x = +p.x.toFixed(5); q.y = +p.y.toFixed(5); N.sel = +k; ed.refresh(); side() },
     onPlace: p => { const n = (Math.max(0, ...N.postes.map(x => x.n)) + 1); N.postes.push({ n, x: +p.x.toFixed(5), y: +p.y.toFixed(5), nota: '' }); N.sel = n; ed.setPlacing(false); ed.refresh(); side() }
   });
   function side() {
     N.postes.sort((a, b) => a.n - b.n);
-    $('#pnote').innerHTML = N.postes.length ? `<b>${N.postes.length} postes</b> marcados na planta. Confira: arraste um número para corrigir a posição, clique para editar ou excluir, e use “+ Adicionar poste” para algum que faltou.` : `<b>Nenhum poste numerado foi encontrado.</b> Use “+ Adicionar poste” e clique na planta sobre cada poste a executar.`;
-    $('#plist').innerHTML = N.postes.map(p => `<span data-n="${p.n}" class="${N.sel === p.n ? 'sel' : ''}">${p.n}${p.nota ? ' •' : ''}</span>`).join('');
+    $('#pnote').innerHTML = N.postes.length ? `<b>${N.postes.length} postes</b> marcados na planta${N.postes.some(p => p.acao === 'retirar') ? ` (${N.postes.filter(p => p.acao === 'retirar').length} a retirar, em quadrado)` : ''}. Confira: arraste um número para corrigir a posição, clique para editar ou excluir, e use “+ Adicionar poste” para algum que faltou.` : `<b>Nenhum poste numerado foi encontrado.</b> Use “+ Adicionar poste” e clique na planta sobre cada poste a executar.`;
+    $('#plist').innerHTML = N.postes.map(p => `<span data-n="${p.n}" class="${N.sel === p.n ? 'sel' : ''}" title="${esc(p.nota || '')}">${p.n}${p.acao === 'retirar' ? ' ✕' : p.acao === 'modificar' ? ' ±' : p.nota ? ' •' : ''}</span>`).join('');
     $$('#plist span').forEach(s => s.onclick = () => { N.sel = +s.dataset.n; const p = N.postes.find(x => x.n === N.sel); ed.focus(p.x, p.y); ed.refresh(); side() });
     const p = N.postes.find(x => x.n === N.sel);
     $('#psel').innerHTML = p ? `<div style="background:#f4f6f9;border-radius:10px;padding:10px;margin-top:10px"><div class="row2"><div><label class="f" style="margin-top:0">Número</label><input class="i" id="pn" type="number" value="${p.n}"></div><div style="display:flex;align-items:flex-end;justify-content:flex-end"><button class="btn sm" id="pdel" style="background:#fee2e2;color:#991b1b">Excluir poste</button></div></div>
-      <label class="f">O que deve ser feito (opcional)</label><input class="i" id="pnota" value="${esc(p.nota || '')}" placeholder="Ex.: implantar poste 11/600 com estrutura N3"></div>` : '';
+      ${(p.estruturas || []).length ? `<label class="f">Estruturas lidas do PDF</label>${estHtml(p)}` : ''}
+      <label class="f">Ação no poste</label><select class="i" id="pacao">${[['', '—'], ['instalar', 'Instalar'], ['retirar', 'Retirar'], ['modificar', 'Modificar (instalar e retirar)']].map(([v, t]) => `<option value="${v}" ${(p.acao || '') === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
+      <label class="f">O que deve ser feito</label><input class="i" id="pnota" value="${esc(p.nota || '')}" placeholder="Ex.: Instalar: B1 · SI-3"></div>` : '';
     if (p) {
       $('#pn').onchange = e => { const v = parseInt(e.target.value, 10); if (!v || N.postes.some(x => x !== p && x.n === v)) { toast('Número inválido ou repetido', 1); e.target.value = p.n; return } p.n = v; N.sel = v; ed.refresh(); side() };
       $('#pnota').oninput = e => { p.nota = e.target.value };
+      $('#pacao').onchange = e => { p.acao = e.target.value; ed.refresh(); side() };
       $('#pdel').onclick = () => { N.postes = N.postes.filter(x => x !== p); N.sel = null; ed.refresh(); side() }
     }
   }
@@ -686,7 +697,7 @@ async function salvarNova() {
     const plantaB64 = await blobB64(N.png);
     const pdfB64 = N.file.size < 25e6 ? await blobB64(N.file) : null;
     sst.textContent = `Enviando para a ${s.div}… (pode levar alguns segundos)`;
-    const obra = Object.assign({}, v, { postes: N.postes.map(p => ({ n: p.n, x: p.x, y: p.y, nota: p.nota || '' })), lat: loc ? loc.lat : '', lon: loc ? loc.lon : '', locOrigem: loc ? loc.src : '' });
+    const obra = Object.assign({}, v, { postes: N.postes.map(p => ({ n: p.n, x: p.x, y: p.y, nota: p.nota || '', acao: p.acao || '', estruturas: p.estruturas || [] })), lat: loc ? loc.lat : '', lon: loc ? loc.lon : '', locOrigem: loc ? loc.src : '' });
     const j = await api(s, 'empenhar', { obra, planta: { b64: plantaB64, w: N.w, h: N.h }, pdf: pdfB64 ? { b64: pdfB64, nome: N.file.name } : null });
     toast('Obra empenhada'); NOVA = null;
     await sincronizar(true); go('obra-' + j.id);
@@ -755,16 +766,17 @@ function pegarGps() {
 function abrirPoste(o, key, novoPos) {
   const novo = !key;
   const I = S.idx[o.id]; const st = key ? I.postes.get(key) : null;
-  const prev = key && key.startsWith('P') ? (o.postes.find(p => 'P' + p.n === key) || {}).nota : '';
+  const pp = key && key.startsWith('P') ? (o.postes.find(p => 'P' + p.n === key) || {}) : {};
+  const prev = pp.nota || ''; const ret = pp.acao === 'retirar';
   const F = { tipo: novo ? 'novo' : null, alt: [], obs: '', foto: null, dataExec: hoje(), gps: null };
   const gpsP = pegarGps().then(g => { F.gps = g; const el = $('#fgps2'); if (el) el.textContent = g ? `GPS do celular: ${g.lat.toFixed(5)}, ${g.lon.toFixed(5)} (±${g.precisao} m)` : 'GPS do celular indisponível. Ative a localização para este app.' });
   const titulo = novo ? 'Poste não previsto' : rotuloPoste(o, key);
   openLayer(`<div class="ov" id="shov" style="align-items:flex-end;padding:0"><div class="sheet" style="position:relative;width:100%"><div class="grab"></div>
     <div style="display:flex;justify-content:space-between;align-items:center"><h4>${esc(titulo)}</h4><button class="btn sm ghost" id="shx">Fechar</button></div>
-    ${prev ? `<div class="small" style="margin-top:6px;background:#f4f6f9;border-radius:8px;padding:8px">Previsto: ${esc(prev)}</div>` : ''}
+    ${(pp.estruturas || []).length ? `<div style="margin-top:8px">${estHtml(pp)}</div>` : prev ? `<div class="small" style="margin-top:6px;background:#f4f6f9;border-radius:8px;padding:8px">Previsto: ${esc(prev)}</div>` : ''}
     ${st && st.last ? `<div class="small" style="margin-top:6px">Situação atual: <span class="chip ${TIPO_CH[st.last.tipo]}">${esc(TIPO_TX[st.last.tipo])}</span>${st.last.pendente ? ' <span class="chip">aguardando envio</span>' : ''}</div>` : ''}
     ${novo ? `<div class="small muted" style="margin-top:6px">Registre o poste implantado fora do projeto. Descreva o que foi feito e tire a foto.</div>` : `
-    <div class="bigbtns"><button class="b1" data-t="conforme">✅ Executado conforme projeto</button><button class="b2" data-t="alterado">✏️ Executado com alteração</button><button class="b3" data-t="nao">⛔ Não executado</button></div>`}
+    <div class="bigbtns"><button class="b1" data-t="conforme">✅ ${ret ? 'Retirado' : 'Executado'} conforme projeto</button><button class="b2" data-t="alterado">✏️ ${ret ? 'Retirado' : 'Executado'} com alteração</button><button class="b3" data-t="nao">⛔ ${ret ? 'Não retirado' : 'Não executado'}</button></div>`}
     <div id="dyn"></div>
     <label class="f">Data da execução</label><input class="i" type="date" id="dex" value="${F.dataExec}" max="${hoje()}">
     <label class="f">Foto do poste <span id="fobr"></span></label>
@@ -857,20 +869,112 @@ async function prepFoto(file){
 
 /* ================= leitura do projeto (texto do PDF) ================= */
 function norm(s){return (s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase();}
-function analisarTexto(items,W,H,MUN){
-  const it=items.filter(i=>i.str&&i.str.trim()).map(i=>({...i,s:i.str.trim()}));
-  const circ=it.filter(i=>i.s==='(');
-  const nums=it.filter(i=>/^\d{1,3}$/.test(i.s));
-  const postes=[];const usados=new Set();
-  for(const n of nums){
-    let best=null,bd=1e9;
-    for(const c of circ){const d=Math.hypot(c.x-n.x,c.y-n.y);if(d<bd){bd=d;best=c}}
-    if(!best||bd>Math.max(9,n.h*1.6))continue;
-    if(best.h<n.h*1.3)continue;
-    const num=parseInt(n.s,10);if(usados.has(num))continue;usados.add(num);
-    postes.push({n:num,x:+((n.x+n.w/2)/W).toFixed(5),y:+((n.y-n.h*.35)/H).toFixed(5)});
+/* ===== leitura vetorial do PDF: círculos, segmentos (para riscos) ===== */
+function geometriaPdf(ol, vp, OPS) {
+  const mul = (m, n) => [m[0]*n[0]+m[2]*n[1], m[1]*n[0]+m[3]*n[1], m[0]*n[2]+m[2]*n[3], m[1]*n[2]+m[3]*n[3], m[0]*n[4]+m[2]*n[5]+m[4], m[1]*n[4]+m[3]*n[5]+m[5]];
+  const ap = (m, x, y) => [m[0]*x+m[2]*y+m[4], m[1]*x+m[3]*y+m[5]];
+  let ctm = vp.transform.slice(); const st = []; const circ = []; const segs = [];
+  for (let i = 0; i < ol.fnArray.length; i++) {
+    const fn = ol.fnArray[i], a = ol.argsArray[i];
+    if (fn === OPS.save) st.push(ctm.slice());
+    else if (fn === OPS.restore) ctm = st.pop() || ctm;
+    else if (fn === OPS.transform) ctm = mul(ctm, a);
+    else if (fn === OPS.paintFormXObjectBegin) { st.push(ctm.slice()); if (a && a[0]) ctm = mul(ctm, a[0]) }
+    else if (fn === OPS.paintFormXObjectEnd) ctm = st.pop() || ctm;
+    else if (fn === OPS.constructPath) {
+      const ops = a[0], c = a[1]; let k = 0, sub = null;
+      const flush = () => {
+        if (!sub) return; const P = sub.pts, curves = sub.curves, closed = sub.closed; sub = null;
+        if (P.length < 5) return;
+        const xs = P.map(p => p[0]), ys = P.map(p => p[1]); const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+        const w = x1 - x0, h = y1 - y0; if (w < 4 || w > 40 || h < 4 || h > 40 || w / h < 0.8 || w / h > 1.25) return;
+        const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2; const ds = P.map(p => Math.hypot(p[0] - cx, p[1] - cy));
+        const m = ds.reduce((s, d) => s + d, 0) / ds.length; const sd = Math.sqrt(ds.reduce((s, d) => s + (d - m) ** 2, 0) / ds.length);
+        const fech = closed || Math.hypot(P[0][0] - P[P.length - 1][0], P[0][1] - P[P.length - 1][1]) < Math.max(1.5, w * 0.15);
+        if ((P.length >= 8 && sd / m < 0.12 && fech) || (curves >= 2 && sd / m < 0.2)) circ.push({ x: cx, y: cy, r: (w + h) / 4 });
+      };
+      for (const op of ops) {
+        if (op === OPS.moveTo) { flush(); sub = { pts: [ap(ctm, c[k], c[k + 1])], curves: 0, closed: false }; k += 2 }
+        else if (op === OPS.lineTo) { const p = ap(ctm, c[k], c[k + 1]); if (sub) { const q = sub.pts[sub.pts.length - 1]; const L = Math.hypot(p[0] - q[0], p[1] - q[1]); if (L > 2 && L < 150) segs.push([q[0], q[1], p[0], p[1]]); sub.pts.push(p) } k += 2 }
+        else if (op === OPS.curveTo) { if (sub) { sub.pts.push(ap(ctm, c[k], c[k + 1]), ap(ctm, c[k + 2], c[k + 3]), ap(ctm, c[k + 4], c[k + 5])); sub.curves++ } k += 6 }
+        else if (op === OPS.curveTo2 || op === OPS.curveTo3) { if (sub) { sub.pts.push(ap(ctm, c[k], c[k + 1]), ap(ctm, c[k + 2], c[k + 3])); sub.curves++ } k += 4 }
+        else if (op === OPS.rectangle) { flush(); k += 4 }
+        else if (op === OPS.closePath) { if (sub) sub.closed = true }
+      }
+      flush();
+    }
   }
-  postes.sort((a,b)=>a.n-b.n);
+  return { circ, segs };
+}
+/* texto riscado: algum segmento atravessa a faixa do meio do texto cobrindo boa parte da largura */
+function riscado(it, segs) {
+  const x0 = it.x, x1 = it.x + it.w, yA = it.y - it.h * 0.7, yB = it.y - it.h * 0.05;
+  for (const [ax, ay, bx, by] of segs) {
+    const sx0 = Math.min(ax, bx), sx1 = Math.max(ax, bx);
+    const ov = Math.min(x1, sx1) - Math.max(x0, sx0); if (ov < Math.max(it.w * 0.5, 3)) continue;
+    const mx = Math.max(Math.max(x0, sx0), Math.min((x0 + x1) / 2, Math.min(x1, sx1)));
+    const t = bx === ax ? 0.5 : (mx - ax) / (bx - ax); const my = ay + (by - ay) * t;
+    if (my >= yA && my <= yB) return true;
+  }
+  return false;
+}
+/* postes: número dentro de círculo (glifo "(" ou desenho) + estruturas próximas */
+function lerPostes(items, W, H, geo) {
+  const it = items.filter(i => i.str && i.str.trim()).map(i => ({ ...i, s: i.str.trim() }));
+  const glifos = it.filter(i => i.s === '(').map(i => ({ x: i.x + i.w / 2, y: i.y - i.h * 0.35, r: i.h * 0.5, glifo: true, h: i.h }));
+  const circ = (geo ? geo.circ : []).concat(glifos);
+  const nums = it.filter(i => /^\d{1,3}$/.test(i.s));
+  const postes = []; const usados = new Set(); const usadosIt = new Set();
+  for (const n of nums) {
+    const cx = n.x + n.w / 2, cy = n.y - n.h * 0.35;
+    let best = null, bd = 1e9;
+    for (const c of circ) { const d = Math.hypot(c.x - cx, c.y - cy); if (d < bd) { bd = d; best = c } }
+    if (!best) continue;
+    if (best.glifo) { if (bd > Math.max(9, n.h * 1.6) || best.h < n.h * 1.3) continue }
+    else { if (bd > best.r * 0.6 || best.r < n.h * 0.45 || best.r > n.h * 2.5) continue }
+    const num = parseInt(n.s, 10); if (usados.has(num)) continue; usados.add(num); usadosIt.add(n);
+    postes.push({ n: num, px: best.glifo ? cx : best.x, py: best.glifo ? cy : best.y, r: best.glifo ? n.h : best.r });
+  }
+  // rótulos de estrutura: textos curtos que não são cabo, distância, código numérico, carimbo
+  const CARIMBO = /^(PROJETO|PROJETISTA|FISCAL|CADASTRO|EMPREITEIRA|LOCAL|CLIENTE|OBRA|OSE|ODI|ODD|ODS|DATA|ESCALA|REF|FOLHA|APROVA|CREA|AVISAR|SOLICITAR)/i;
+  const ehEstrutura = s => /^[A-Z0-9][A-Z0-9\-()\/.]*$/.test(s) && s.length <= 16 && (/\d/.test(s) || s.length <= 3)
+    && !/^[XY][:;]/.test(s) && !/^[A-Z]{1,2}\d{3,}$/.test(s) && !/^\d+$/.test(s) && !/^\d{4,}/.test(s) && !/^\d+-\d+$/.test(s) && !/\d+X\d+/.test(s) && !CARIMBO.test(s);
+  const cand = it.filter(i => !usadosIt.has(i) && i.s !== '(' && i.h < 12 && ehEstrutura(i.s));
+  // blocos: pilha vertical de rótulos alinhados à esquerda
+  cand.sort((a, b) => a.y - b.y);
+  const blocos = [];
+  for (const c of cand) {
+    const b = blocos.find(b => Math.abs(b.x - c.x) < 6 && c.y - b.yUlt > 0 && c.y - b.yUlt < c.h * 2.8);
+    if (b) { b.itens.push(c); b.yUlt = c.y } else blocos.push({ x: c.x, yIni: c.y, yUlt: c.y, itens: [c] });
+  }
+  const segs = geo ? geo.segs : [];
+  for (const b of blocos) {
+    // ponto do bloco mais próximo do poste
+    let best = null, bd = 1e9;
+    for (const p of postes) {
+      const bx = Math.max(b.x, Math.min(p.px, b.x + Math.max(...b.itens.map(i => i.w))));
+      const by = Math.max(b.yIni - b.itens[0].h, Math.min(p.py, b.yUlt));
+      const d = Math.hypot(bx - p.px, by - p.py); if (d < bd) { bd = d; best = p }
+    }
+    if (!best || bd > 45) continue;
+    if (best.bloco && best.blocoD <= bd) continue;
+    best.bloco = b; best.blocoD = bd;
+  }
+  for (const p of postes) {
+    const its = p.bloco ? p.bloco.itens : [];
+    const est = its.map(i => ({ t: i.s, r: riscado(i, segs) }));
+    p.estruturas = est;
+    const ri = est.filter(e => e.r).length;
+    p.acao = !est.length ? '' : ri === est.length ? 'retirar' : ri ? 'modificar' : 'instalar';
+    p.nota = est.length ? (p.acao === 'retirar' ? 'Retirar: ' + est.map(e => e.t).join(' · ') :
+      p.acao === 'modificar' ? 'Instalar: ' + est.filter(e => !e.r).map(e => e.t).join(' · ') + ' | Retirar: ' + est.filter(e => e.r).map(e => e.t).join(' · ') :
+      'Instalar: ' + est.map(e => e.t).join(' · ')) : '';
+  }
+  return postes.sort((a, b) => a.n - b.n).map(p => ({ n: p.n, x: +(p.px / W).toFixed(5), y: +(p.py / H).toFixed(5), nota: p.nota, acao: p.acao, estruturas: p.estruturas }));
+}
+function analisarTexto(items,W,H,MUN,geo){
+  const it=items.filter(i=>i.str&&i.str.trim()).map(i=>({...i,s:i.str.trim()}));
+  const postes=lerPostes(items,W,H,geo);
   const LBL=['PROJETO:','PROJETISTA:','FISCAL:','CADASTRO:','EMPREITEIRA:','LOCAL:','CLIENTE:','OBRA:','OSE:','ODI:','ODD:','ODS:','DATA:','ESCALA:','REF:','FOLHA:','APROVAÇÃO:','CREA:'];
   const isLbl=s=>LBL.includes(s.toUpperCase())||/:$/.test(s);
   function campo(lbl){
@@ -890,7 +994,8 @@ function analisarTexto(items,W,H,MUN){
   const all=it.map(i=>i.s).join(' ');
   const m=all.match(/\(?\s*(\d{6}(?:[.,]\d+)?)\s*[,;]\s*(\d{7}(?:[.,]\d+)?)\s*\)?/);
   let utm=null;if(m){const e=parseFloat(m[1].replace(',','.')),n=parseFloat(m[2].replace(',','.'));if(e>150000&&e<850000&&n>6900000&&n<7600000)utm={e,n}}
-  return {postes,campos:f,municipio:mun,utm};
+  let ll=null;const md=all.match(/(-2[2-7][.,]\d{3,})\s*[,;]\s*(-(?:4[89]|5[0-4])[.,]\d{3,})/);if(md)ll={lat:parseFloat(md[1].replace(',','.')),lon:parseFloat(md[2].replace(',','.'))};
+  return {postes,campos:f,municipio:mun,utm,ll};
 }
 function utmToLatLon(E,N,zone=22){
   const a=6378137,f=1/298.257223563,k0=0.9996,e2=f*(2-f),ep2=e2/(1-e2);
