@@ -1,7 +1,7 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.8.0';
+const VERSAO_APP = '1.9.0';
 const LIB = {
   pdf: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   pdfw: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
@@ -331,6 +331,7 @@ function route() {
   else if (h === 'assinar' || /^doc-/.test(h)) { S.mode = soCampo ? 'campo' : (h === 'assinar' ? 'campo' : (S.mode || 'gestao')); S.view = h === 'assinar' ? 'assinar' : 'doc'; S.docId = h.slice(4) }
   else if (h === 'docs' && !soCampo) { S.mode = 'gestao'; S.view = 'docs' }
   else if (h === 'assinatura') { S.mode = 'campo'; S.view = 'assinatura' }
+  else if (h === 'fluxo') { S.mode = soCampo ? 'campo' : (S.mode || 'gestao'); S.view = 'fluxo' }
   else if (m || soCampo) { S.mode = 'campo'; S.view = m && m[2] ? 'fobra' : 'flist'; S.obraId = m && m[2] ? m[2] : null }
   else {
     m = h.match(/^obra-(.+)$/); const mh = h.match(/^hist-(.+)$/);
@@ -359,13 +360,13 @@ let VIEWER = null;
 function render(fromData) {
   const app = $('#app');
   if (S.view === 'login') { vLogin(app); return }
-  if (fromData && (S.view === 'nova' || S.view === 'conta' || S.view === 'historico' || S.view === 'hobra' || S.view === 'docs' || S.view === 'doc' || S.view === 'assinar' || S.view === 'assinatura')) return;
+  if (fromData && (S.view === 'nova' || S.view === 'conta' || S.view === 'historico' || S.view === 'hobra' || S.view === 'docs' || S.view === 'doc' || S.view === 'assinar' || S.view === 'assinatura' || S.view === 'fluxo')) return;
   if (fromData && S.view === 'fobra' && VIEWER && VIEWER.obraId === S.obraId) { VIEWER.refresh(); updFbot(); return }
   if (fromData && S.view === 'obra' && VIEWER && VIEWER.obraId === S.obraId) { VIEWER.refresh(); renderObraSide(); return }
   if (S.view === 'conta') { VIEWER = null; vConta(app); return }
   if (!S.carregado) { app.innerHTML = `<div class="empty">Carregando…</div>`; return }
   VIEWER = null;
-  ({ painel: vPainel, obras: vObras, nova: vNova, obra: vObra, flist: vFlist, fobra: vFobra, historico: vHistorico, hobra: vHObra, docs: vDocs, doc: vDoc, assinar: vAssinar, assinatura: vAssinatura }[S.view] || vPainel)(app);
+  ({ painel: vPainel, obras: vObras, nova: vNova, obra: vObra, flist: vFlist, fobra: vFobra, historico: vHistorico, hobra: vHObra, docs: vDocs, doc: vDoc, assinar: vAssinar, assinatura: vAssinatura, fluxo: vFluxo }[S.view] || vPainel)(app);
 }
 function filtroDivHtml() {
   if (S.sess.length < 2) return '';
@@ -1126,6 +1127,7 @@ function vFlist(app) {
    ${S.fila.length ? `<div class="note" style="margin-top:10px">${S.fila.length} registro(s) aguardando sinal para enviar. <button class="btn sm" id="envf">Tentar agora</button></div>` : ''}
    ${!copel && docsTotal() ? `<a class="fcard" href="#assinar" style="display:block;margin-top:10px;text-decoration:none;color:inherit;${docsPend() ? 'background:#fff7ed;border:1px solid #fed7aa' : ''}"><b>📄 ${docsPend() ? docsPend() + ' documento(s) aguardando sua assinatura' : 'Documentos assinados'}</b><div class="small muted">BMD, FF e vistoria enviados pela Copel${docsPend() ? ' · toque para assinar' : ' · toque para baixar'}</div></a>` : ''}
    ${!copel && !assTotal() ? `<a class="fcard" href="#assinatura" style="display:block;margin-top:10px;text-decoration:none;color:inherit;background:#eff6ff;border:1px solid #bfdbfe"><b>✍️ Cadastre a assinatura da empresa</b><div class="small muted">O responsável (dono ou supervisor) desenha a assinatura e cria um PIN uma vez; depois assina BMD e FF com um toque.</div></a>` : ''}
+   <a href="#fluxo" class="small" style="display:block;margin-top:10px;text-align:center">📘 Como funciona o fluxo do app</a>
    <div id="inst"></div></div>
    <div class="flist">${L.length ? L.map(o => {
     const I = S.idx[o.id]; const d = diasAte(o.prazo); return `<div class="fcard" data-o="${esc(o.id)}"><div class="t"><b>${esc(o.projeto)}</b><span class="pct" style="color:var(--or)">${fmt1(I.pct * 100)}%</span></div>
@@ -1768,4 +1770,24 @@ async function carimbarPdf(bytes, a) {
   let linha = ''; for (const w of ok(aviso).split(' ')) { if (f.widthOfTextAtSize(linha + ' ' + w, 9.5) > 480) { tx(linha, { size: 9.5, gap: 13 }); linha = w } else linha = linha ? linha + ' ' + w : w } if (linha) tx(linha, { size: 9.5 });
   doc.setModificationDate(q); doc.setProducer('Fiscalização de Obras · Copel');
   return await doc.save();
+}
+
+/* ================= fluxo do processo (BPMN) ================= */
+const FLUXO = { src: './fluxo.svg', w: 4048, h: 718 };
+function vFluxo(app) {
+  const campo = S.mode === 'campo';
+  app.innerHTML = `<div class="${campo ? 'fhead' : ''}" style="${campo ? '' : 'margin-bottom:12px'}"><div class="${campo ? 'who' : 'card'}" style="${campo ? '' : 'display:flex;align-items:center;gap:12px;flex-wrap:wrap'}">
+     ${campo ? `<div><b>Como funciona o fluxo</b><div class="small muted">Arraste e use + / − para ver os detalhes</div></div><a class="btn sm ghost" href="#campo" style="text-decoration:none">← Voltar</a>`
+      : `<div style="flex:1;min-width:240px"><h2 style="margin:0">Fluxo da fiscalização de obras</h2><div class="small muted">Do PEP liberado ao encerramento: quem faz cada etapa (Gestor, App, Empreiteira e Fiscal). Arraste e use + / − para ver os detalhes.</div></div>
+         <a class="btn sm ghost" href="./docs/Fluxo_Fiscalizacao_de_Obras.png" download style="text-decoration:none">⬇️ Imagem (PNG)</a><a class="btn sm ghost" href="./docs/Fluxo_Fiscalizacao_de_Obras.bpmn" download style="text-decoration:none">⬇️ BPMN (Bizagi)</a>`}</div></div>
+   <div id="fvw" style="height:${campo ? 'calc(100vh - 150px)' : 'calc(100vh - 210px)'};min-height:380px;${campo ? 'margin:0 10px' : ''}"></div>
+   <div class="small muted" style="margin:10px ${campo ? '14px' : '2px'}">
+     <b>Gestor:</b> empenha no SAP, sobe a AES e os PDFs dos projetos e confere os postes ·
+     <b>App:</b> lê AES e PDFs, publica a obra, atualiza o painel, encerra e aplica as assinaturas ·
+     <b>Empreiteira:</b> executa e registra cada poste, corrige reprovados, assina e baixa os documentos ·
+     <b>Fiscal:</b> fiscaliza e aprova os postes, faz a medição final, emite FF e BMD no SAP, envia para assinatura e arquiva.</div>`;
+  const host = $('#fvw');
+  const v = Viewer(host, { img: FLUXO.src, iw: FLUXO.w, ih: FLUXO.h, getMarkers: () => [] });
+  // abre com a altura do fluxo preenchendo a tela, a partir do início (arraste para o lado)
+  setTimeout(() => { const r = host.getBoundingClientRect(); if (!r.width) return; const zz = Math.min(r.height / FLUXO.h * .94, 1.1); v.focus((r.width / 2) / (FLUXO.w * zz), .5, zz) }, 200);
 }
