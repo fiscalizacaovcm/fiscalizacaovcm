@@ -7,11 +7,11 @@
  * Para atualizar o código depois: Implantar > Gerenciar implantações > ✏️ > Versão: Nova versão > Implantar.
  * NUNCA use "Nova implantação" de novo, porque o endereço muda e o app perde a conexão.
  */
-const VERSAO_SERVIDOR = '1.2';
+const VERSAO_SERVIDOR = '1.3';
 
 const COLS_OBRAS = ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us',
   'empenhoEm', 'prazo', 'status', 'lat', 'lon', 'locOrigem', 'plantaId', 'plantaW', 'plantaH', 'pdfId', 'pdfNome',
-  'postes', 'criadoPor', 'criadoEm', 'atualizadoEm', 'concluidaEm', 'resumo'];
+  'postes', 'criadoPor', 'criadoEm', 'atualizadoEm', 'concluidaEm', 'resumo', 'pep', 'encerramento'];
 const COLS_REGS = ['id', 'obra', 'poste', 'tipo', 'alt', 'obs', 'fotoId', 'lat', 'lon', 'gpsOrigem', 'precisao', 'dataExec',
   'marcadoEm', 'recebidoEm', 'nome', 'empresa', 'x', 'y', 'invalido', 'invalidadoPor', 'alteradoEm'];
 const ABAS = {
@@ -26,7 +26,9 @@ const COL_DATA = ['empenhoEm', 'prazo', 'dataExec'];
 const COL_NUM = ['us', 'lat', 'lon', 'plantaW', 'plantaH', 'precisao', 'x', 'y'];
 const PAPEIS = ['gestor', 'fiscal', 'empreiteira'];
 const EDITAVEIS_OBRA = ['ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us', 'empenhoEm',
-  'prazo', 'lat', 'lon', 'locOrigem', 'postes'];
+  'prazo', 'lat', 'lon', 'locOrigem', 'postes', 'pep'];
+const TIPOS_EXEC = ['conforme', 'alterado', 'nao', 'novo'];
+const TIPOS_FISC = ['aprovado', 'reprovado'];
 
 /* ============================ menu e configuração ============================ */
 function onOpen() {
@@ -262,25 +264,28 @@ function atualizarObra(p, req) {
 
 /** Conclui a obra: move a obra e todos os registros dela para as abas de histórico. */
 function concluir(p, req) {
-  if (p.papel !== 'gestor') return { ok: false, erro: 'só o gestor pode concluir a obra' };
+  if (p.papel !== 'gestor') return { ok: false, erro: 'só o gestor pode encerrar a obra' };
   let res = { ok: false, erro: 'obra não encontrada' };
-  comTrava(function () {
-    const row = buscarLinha('obras', req.id);
-    if (!row) return;
-    const o = linhaObj('obras', row);
-    const regs = ler('registros').filter(function (r) { return r.obra === req.id; });
-    const agora = agoraIso();
-    o.status = 'concluida';
-    o.concluidaEm = agora;
-    o.atualizadoEm = agora;
-    o.resumo = JSON.stringify(resumoObra(o, regs));
-    anexar('obras_historico', o);
-    moverLinhas('registros', 'registros_historico', req.id, null);
-    aba('obras').deleteRow(row);
-    marcarAlteracao();
-    res = { ok: true };
-  });
+  comTrava(function () { if (encerrarObra(req.id, 'manual · ' + (p.responsavel || p.papel))) res = { ok: true }; });
   return res;
+}
+/** Move a obra e seus registros para o histórico (chamar dentro de comTrava). */
+function encerrarObra(id, motivo) {
+  const row = buscarLinha('obras', id);
+  if (!row) return false;
+  const o = linhaObj('obras', row);
+  const regs = ler('registros').filter(function (r) { return r.obra === id; });
+  const agora = agoraIso();
+  o.status = 'concluida';
+  o.concluidaEm = agora;
+  o.atualizadoEm = agora;
+  o.encerramento = motivo || '';
+  o.resumo = JSON.stringify(resumoObra(o, regs));
+  anexar('obras_historico', o);
+  moverLinhas('registros', 'registros_historico', id, null);
+  aba('obras').deleteRow(row);
+  marcarAlteracao();
+  return true;
 }
 
 /** Reabre uma obra concluída: volta do histórico para as abas ativas. */
@@ -295,6 +300,7 @@ function reabrir(p, req) {
     o.status = 'ativa';
     o.concluidaEm = '';
     o.resumo = '';
+    o.encerramento = '';
     o.atualizadoEm = agora;
     anexar('obras', o);
     moverLinhas('registros_historico', 'registros', req.id, agora);
@@ -312,7 +318,7 @@ function historico(p) {
     ok: true, obras: L.map(function (o) {
       let resumo = null; try { resumo = o.resumo ? JSON.parse(o.resumo) : null; } catch (err) { }
       return { id: o.id, projeto: o.projeto, descricao: o.descricao, cliente: o.cliente, municipio: o.municipio, empreiteira: o.empreiteira,
-        us: o.us, aes: o.aes, empenhoEm: o.empenhoEm, prazo: o.prazo, concluidaEm: o.concluidaEm, resumo: resumo };
+        us: o.us, aes: o.aes, pep: o.pep, empenhoEm: o.empenhoEm, prazo: o.prazo, concluidaEm: o.concluidaEm, encerramento: o.encerramento, resumo: resumo };
     })
   };
 }
@@ -325,26 +331,52 @@ function obraHistorico(p, req) {
   return { ok: true, obra: normObra(o), registros: regs.map(normReg) };
 }
 
-/** Situação final por poste: último registro válido de cada poste previsto. */
-function resumoObra(o, regs) {
+/**
+ * Situação por poste: última execução válida e última fiscalização válida.
+ * A aprovação do fiscal só vale se for posterior à última execução do poste.
+ */
+function situacaoPostes(o, regs) {
   let postes = [];
-  try { postes = JSON.parse(o.postes || '[]'); } catch (err) { }
-  const ult = {};
-  regs.filter(function (r) { return r.invalido !== 'SIM'; })
-    .sort(function (a, b) { return String(a.marcadoEm || a.recebidoEm).localeCompare(String(b.marcadoEm || b.recebidoEm)); })
-    .forEach(function (r) { ult[r.tipo === 'novo' ? 'N:' + r.id : r.poste] = r.tipo; });
-  let ok = 0, alt = 0, bad = 0;
-  postes.forEach(function (pp) { const t = ult['P' + pp.n]; if (t === 'conforme') ok++; else if (t === 'alterado') alt++; else if (t === 'nao') bad++; });
-  const novos = Object.keys(ult).filter(function (k) { return k.indexOf('N:') === 0; }).length;
-  const tot = postes.length, exec = ok + alt;
-  return { tot: tot, ok: ok, alt: alt, bad: bad, exec: exec, novos: novos, registros: regs.length, usExec: tot ? Math.round((Number(o.us) || 0) * exec / tot) : 0 };
+  try { postes = typeof o.postes === 'string' ? JSON.parse(o.postes || '[]') : (o.postes || []); } catch (err) { }
+  const quando = function (r) { return String(r.marcadoEm || r.recebidoEm); };
+  const ex = {}, fi = {};
+  regs.filter(function (r) { return r.invalido !== 'SIM' && r.invalido !== true; })
+    .sort(function (a, b) { return quando(a).localeCompare(quando(b)); })
+    .forEach(function (r) {
+      const k = r.tipo === 'novo' ? 'N:' + r.id : r.poste;
+      if (TIPOS_FISC.indexOf(r.tipo) >= 0) fi[k] = { t: r.tipo, em: quando(r) };
+      else ex[k] = { t: r.tipo, em: quando(r) };
+    });
+  const chaves = postes.map(function (pp) { return 'P' + pp.n; }).concat(Object.keys(ex).filter(function (k) { return k.indexOf('N:') === 0; }));
+  let ok = 0, alt = 0, bad = 0, fis = 0, rep = 0, fisPrev = 0;
+  chaves.forEach(function (k) {
+    const e = ex[k], f = fi[k];
+    if (e && e.t === 'conforme') ok++; else if (e && e.t === 'alterado') alt++; else if (e && e.t === 'nao') bad++;
+    const valida = f && e && f.em >= e.em;
+    if (valida && f.t === 'aprovado') { fis++; if (k.indexOf('P') === 0) fisPrev++; }
+    if (valida && f.t === 'reprovado') rep++;
+  });
+  return { postes: postes, chaves: chaves, ok: ok, alt: alt, bad: bad, fis: fis, fisPrev: fisPrev, rep: rep };
+}
+function resumoObra(o, regs) {
+  const s = situacaoPostes(o, regs);
+  const tot = s.postes.length, exec = s.ok + s.alt;
+  const us = Number(o.us) || 0;
+  return { tot: tot, ok: s.ok, alt: s.alt, bad: s.bad, exec: exec, novos: s.chaves.length - tot, fiscalizados: s.fisPrev, reprovados: s.rep,
+    registros: regs.length, usExec: tot ? Math.round(us * exec / tot) : 0, usMedida: tot ? Math.round(us * s.fisPrev / tot) : 0 };
+}
+/** Todos os postes (previstos e não previstos) aprovados pelo fiscal? */
+function obraFiscalizada(o, regs) {
+  const s = situacaoPostes(o, regs);
+  return s.chaves.length > 0 && s.fis === s.chaves.length;
 }
 
 /* ============================ registros ============================ */
 function registrar(p, req) {
   const r = req.registro || {};
   if (!r.id || !r.obra || !r.tipo) return { ok: false, erro: 'registro incompleto' };
-  if (['conforme', 'alterado', 'nao', 'novo'].indexOf(r.tipo) < 0) return { ok: false, erro: 'tipo inválido' };
+  if (TIPOS_EXEC.indexOf(r.tipo) < 0 && TIPOS_FISC.indexOf(r.tipo) < 0) return { ok: false, erro: 'tipo inválido' };
+  if (TIPOS_FISC.indexOf(r.tipo) >= 0 && p.papel === 'empreiteira') return { ok: false, erro: 'só a fiscalização pode aprovar ou reprovar postes' };
   const obra = ler('obras').filter(function (o) { return o.id === r.obra; })[0];
   if (!obra) return { ok: false, erro: 'obra não encontrada ou já concluída' };
   if (p.papel === 'empreiteira' && norm(obra.empreiteira) !== norm(p.empresa)) return { ok: false, erro: 'esta obra não é da sua empresa' };
@@ -365,8 +397,16 @@ function registrar(p, req) {
     recebidoEm: agora, nome: r.nome || p.responsavel || '', empresa: p.papel === 'empreiteira' ? p.empresa : (r.empresa || p.empresa),
     x: r.x != null ? r.x : '', y: r.y != null ? r.y : '', invalido: '', invalidadoPor: '', alteradoEm: agora
   };
-  comTrava(function () { if (!buscarLinha('registros', r.id)) { anexar('registros', linha); marcarAlteracao(); } });
-  return { ok: true, id: r.id, fotoId: fotoId };
+  let encerrada = false;
+  comTrava(function () {
+    if (!buscarLinha('registros', r.id)) { anexar('registros', linha); marcarAlteracao(); }
+    // última aprovação do fiscal: a obra vai sozinha para encerramento final
+    if (r.tipo === 'aprovado') {
+      const regsObra = ler('registros').filter(function (x) { return x.obra === r.obra; });
+      if (obraFiscalizada(obra, regsObra)) encerrada = encerrarObra(r.obra, 'fiscalização concluída · ' + (r.nome || p.responsavel || p.papel));
+    }
+  });
+  return { ok: true, id: r.id, fotoId: fotoId, encerrada: encerrada };
 }
 
 function invalidar(p, req) {

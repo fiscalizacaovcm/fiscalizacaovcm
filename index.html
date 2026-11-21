@@ -96,6 +96,18 @@ textarea.i{min-height:64px;resize:vertical}
 .viewer .mk.pend{border-style:dashed;opacity:.85}
 .viewer .mk.ed{background:var(--or);color:var(--nv)}
 .viewer .mk.ret{border-radius:7px}
+.viewer .mk.fis::after{content:'✓';position:absolute;right:-7px;top:-7px;width:15px;height:15px;border-radius:50%;background:#0b3d23;color:#fff;font-size:10px;line-height:15px;text-align:center;border:2px solid #fff}
+.viewer .mk.rep::after{content:'!';position:absolute;right:-7px;top:-7px;width:15px;height:15px;border-radius:50%;background:var(--bad);color:#fff;font-size:11px;line-height:15px;text-align:center;border:2px solid #fff;font-weight:900}
+.fiscbox{margin-top:12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:10px}
+.lbl{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--mu)}
+.fiscbox .bigbtns{margin-top:8px;grid-template-columns:1fr 1fr}
+.etapas{display:flex;align-items:stretch;gap:10px;flex-wrap:wrap}
+.etapas>div,.etapas>a{flex:1;min-width:150px;background:#f6f7f9;border-radius:12px;padding:12px 14px;text-decoration:none;color:inherit}
+.etapas>a{background:#e9f9ef}
+.etapas b{display:block;font-size:24px;font-weight:800;color:var(--nv)}
+.etapas span{display:block;font-weight:700;font-size:13px}
+.etapas small{display:block;color:var(--mu);font-size:11.5px;margin-top:2px}
+.etapas>i{align-self:center;font-style:normal;color:#c3c9d3;font-size:22px}
 .est div{display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin:3px 0}
 .est .lbl{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;border-radius:5px}
 .est .lbl.ok{background:#dcfce7;color:#166534}.est .lbl.bad{background:#fee2e2;color:#991b1b}

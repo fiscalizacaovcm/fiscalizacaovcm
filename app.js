@@ -1,12 +1,13 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.3.1';
+const VERSAO_APP = '1.4.0';
 const LIB = {
   pdf: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   pdfw: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
 };
 const ALTERACOES = ['Poste deslocado', 'Estrutura diferente', 'Altura/esforço do poste diferente', 'Condutor/vão diferente', 'Equipamento diferente', 'Aterramento diferente', 'Outro'];
+const MOTIVOS_REP = ['Estrutura divergente do projeto', 'Poste fora de posição', 'Falta material ou acabamento', 'Segurança / aterramento', 'Foto não comprova', 'Outro'];
 const PENDENCIAS = ['Falta material', 'Impedimento do proprietário', 'Roçada/supressão pendente', 'Interferência (outra rede, via)', 'Condição de terreno/clima', 'Outro'];
 const PRMAP = window.PRMAP;
 
@@ -188,6 +189,7 @@ setInterval(() => { if (document.visibilityState !== 'visible') return; enviarFi
 
 /* ================= índice derivado ================= */
 const EXEC = new Set(['conforme', 'alterado', 'novo']);
+const FISC = new Set(['aprovado', 'reprovado']);
 function todosRegs() {
   const pend = S.fila.map(it => Object.assign({}, it.registro, { pref: it.pref, em: it.registro.marcadoEm, equipe: it.registro.nome, pendente: true, foto: it.fotoLocal ? { local: it.fotoLocal } : null }));
   const ids = new Set(S.regs.map(r => r.id));
@@ -200,8 +202,9 @@ function acumular(I, r) {
   if (r.tipo === 'novo' && !I.novos.find(n => n.key === 'N:' + r.id)) I.novos.push({ key: 'N:' + r.id, x: Number(r.x), y: Number(r.y), desc: r.obs, id: r.id });
   const key = r.tipo === 'novo' ? 'N:' + r.id : r.poste;
   const st = I.postes.get(key) || { hist: [], first: null };
-  st.hist.push(r); st.last = r;
-  if (EXEC.has(r.tipo) && !st.first) st.first = r.dataExec || (r.em || '').slice(0, 10);
+  st.hist.push(r);
+  if (FISC.has(r.tipo)) st.fisc = r;
+  else { st.last = r; if (EXEC.has(r.tipo) && !st.first) st.first = r.dataExec || (r.em || '').slice(0, 10) }
   I.postes.set(key, st);
   if (!I.ultimo || r.em > I.ultimo) I.ultimo = r.em;
 }
@@ -214,6 +217,12 @@ function fechar(o, I) {
   for (const [, st] of I.postes) if (st.first) I.porDia[st.first] = (I.porDia[st.first] || 0) + 1;
   I.tot = tot; I.ok = ok; I.alt = alt; I.bad = bad; I.exec = ok + alt; I.pct = tot ? (ok + alt) / tot : 0;
   I.usExec = (o.us || 0) * I.pct;
+  // fiscalização: vale a aprovação posterior à última execução do poste
+  let fis = 0, rep = 0;
+  for (const p of (o.postes || [])) { const f = fiscPoste(I, 'P' + p.n); if (f === 'aprovado') fis++; else if (f === 'reprovado') rep++ }
+  for (const n of I.novos) { const f = fiscPoste(I, n.key); if (f === 'reprovado') rep++ }
+  I.fis = fis; I.rep = rep; I.pctFis = tot ? fis / tot : 0; I.usMed = (o.us || 0) * I.pctFis;
+  I.etapa = I.exec === 0 ? 'empenhada' : I.exec < tot ? 'execucao' : 'executada';
   I.pend = I.regs.filter(r => r.pendente).length;
   const gps = I.regs.filter(r => r.gps && !r.invalido && r.gps.lat != null);
   I.gps = gps.length ? { lat: gps.reduce((s, r) => s + Number(r.gps.lat), 0) / gps.length, lon: gps.reduce((s, r) => s + Number(r.gps.lon), 0) / gps.length } : null;
@@ -229,13 +238,21 @@ function reindex() {
 }
 const getObra = id => S.obras.find(x => x.id === id) || (S.hist && S.hist.obra.id === id ? S.hist.obra : null);
 function posObra(o) { if (o.lat != null && o.lon != null) return { lat: o.lat, lon: o.lon }; const I = S.idx[o.id]; return I && I.gps ? I.gps : null }
+function fiscPoste(I, key) {
+  const st = I && I.postes.get(key); if (!st || !st.fisc || !st.last || !EXEC.has(st.last.tipo)) return '';
+  return (st.fisc.em || '') >= (st.last.em || '') ? st.fisc.tipo : '';
+}
+const ETAPA_TX = { empenhada: 'Empenhada', execucao: 'Em execução', executada: 'Executada · aguardando fiscalização' };
+const ETAPA_CH = { empenhada: '', execucao: 'or', executada: 'alt' };
+const etapaChip = I => `<span class="chip ${ETAPA_CH[I.etapa]}">${ETAPA_TX[I.etapa]}</span>`;
 function statusPoste(o, key) {
   const I = S.idx[o.id]; const st = I && I.postes.get(key); if (!st || !st.last) return '';
   const t = st.last.tipo; const c = t === 'conforme' ? 'ok' : t === 'alterado' ? 'alt' : t === 'nao' ? 'bad' : t === 'novo' ? 'novo' : '';
-  return c + (st.last.pendente ? ' pend' : '');
+  const f = fiscPoste(S.idx[o.id], key);
+  return c + (f === 'aprovado' ? ' fis' : f === 'reprovado' ? ' rep' : '') + (st.last.pendente || (st.fisc && st.fisc.pendente) ? ' pend' : '');
 }
-const TIPO_TX = { conforme: 'Executado conforme projeto', alterado: 'Executado com alteração', nao: 'Não executado', novo: 'Poste não previsto' };
-const TIPO_CH = { conforme: 'ok', alterado: 'alt', nao: 'bad', novo: 'novo' };
+const TIPO_TX = { conforme: 'Executado conforme projeto', alterado: 'Executado com alteração', nao: 'Não executado', novo: 'Poste não previsto', aprovado: 'Aprovado pelo fiscal (medido)', reprovado: 'Reprovado pelo fiscal' };
+const TIPO_CH = { conforme: 'ok', alterado: 'alt', nao: 'bad', novo: 'novo', aprovado: 'ok', reprovado: 'bad' };
 const TIPO_RET = { conforme: 'Retirado conforme projeto', alterado: 'Retirado com alteração', nao: 'Não retirado' };
 function tipoTx(o, r) {
   const p = r.poste && String(r.poste).startsWith('P') ? (o.postes || []).find(x => 'P' + x.n === r.poste) : null;
@@ -353,22 +370,23 @@ function ligarFiltroDiv() { $('#fdiv') && ($('#fdiv').onchange = e => { S.divFil
 function vPainel(app) {
   const base = obrasVisiveis();
   const ativas = base.filter(o => o.status !== 'concluida' && o.status !== 'cancelada');
-  let us = 0, usE = 0, pt = 0, pe = 0, hojeN = 0, alt = 0, bad = 0; const h = hoje();
-  for (const o of ativas) { const I = S.idx[o.id]; us += o.us || 0; usE += I.usExec; pt += I.tot; pe += I.exec; alt += I.alt; bad += I.bad }
+  let us = 0, usE = 0, usM = 0, pt = 0, pe = 0, pf = 0, hojeN = 0, alt = 0, bad = 0, rep = 0; const h = hoje(); const et = { empenhada: 0, execucao: 0, executada: 0 }; const usEt = { empenhada: 0, execucao: 0, executada: 0 };
+  for (const o of ativas) { const I = S.idx[o.id]; us += o.us || 0; usE += I.usExec; usM += I.usMed; pt += I.tot; pe += I.exec; pf += I.fis; alt += I.alt; bad += I.bad; rep += I.rep; et[I.etapa]++; usEt[I.etapa] += o.us || 0 }
   const ids = new Set(base.map(o => o.id));
   for (const r of todosRegs()) if (!r.invalido && r.dataExec === h && ids.has(r.obra)) hojeN++;
   app.innerHTML = `
   ${S.sess.length > 1 ? `<div class="toolbar">${filtroDivHtml()}</div>` : ''}
   <div class="grid k4">
-    <div class="kpi"><b>${ativas.length}</b><span>obras em andamento</span><small><a href="#historico" style="color:#8b97aa">${qtdHistorico()} concluídas no histórico</a></small></div>
+    <div class="kpi"><b>${ativas.length}</b><span>obras em andamento</span><small><a href="#historico" style="color:#8b97aa">${qtdHistorico()} encerradas no histórico</a></small></div>
     <div class="kpi"><b>${fmt(us)}</b><span>US empenhadas</span><small>obras em andamento</small></div>
-    <div class="kpi"><b>${fmt(usE)}</b><span>US executadas (estim.)</span><small>${us ? fmt1(usE / us * 100) + '%' : '—'} · proporcional aos postes</small></div>
-    <div class="kpi"><b>${fmt(pe)}<span style="display:inline;font-size:15px;color:#c7cfdb"> / ${fmt(pt)}</span></b><span>postes executados</span><small>${alt} com alteração · ${bad} não executados</small></div>
+    <div class="kpi"><b>${fmt(usE)}</b><span>US executadas</span><small>${us ? fmt1(usE / us * 100) + '%' : '—'} · ${fmt(pe)} de ${fmt(pt)} postes · ${alt} com alteração</small></div>
+    <div class="kpi"><b>${fmt(usM)}</b><span>US medidas (fiscalizadas)</span><small>${us ? fmt1(usM / us * 100) + '%' : '—'} · ${fmt(pf)} postes aprovados${rep ? ` · ${rep} reprovados` : ''}</small></div>
     <div class="kpi"><b>${hojeN}</b><span>registros hoje</span><small>${dBR(h)}</small></div>
   </div>
+  <div class="card etapas" style="margin-top:14px">${[['empenhada', 'Empenhadas', 'sem registro em campo'], ['execucao', 'Em execução', 'empreiteira registrando'], ['executada', 'Executadas em campo', 'aguardando fiscalização']].map(([k, t, sub]) => `<div><b>${et[k]}</b><span>${t}</span><small>${fmt(usEt[k])} US · ${sub}</small></div>`).join('<i>›</i>')}<i>›</i><a href="#historico"><b>${qtdHistorico()}</b><span>Encerramento final</span><small>fiscalizadas · no histórico</small></a></div>
   <div class="grid two" style="margin-top:14px">
     <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><h2 style="margin:0">Onde estão as obras</h2>
-      <div class="legend"><span style="--c:var(--pend)">sem início</span><span style="--c:var(--or)">em execução</span><span style="--c:var(--ok)">concluída em campo</span></div></div>
+      <div class="legend"><span style="--c:var(--pend)">sem início</span><span style="--c:var(--or)">em execução</span><span style="--c:var(--ok)">executada em campo</span></div></div>
       <div class="mapbox" id="mapa" style="margin-top:8px"></div></div>
     <div class="grid" style="align-content:start">
       <div class="card chart"><h2>Avanço diário · postes executados</h2><div id="graf"></div></div>
@@ -389,6 +407,8 @@ function vPainel(app) {
     const sem = I.ultimo ? Math.floor((Date.now() - new Date(I.ultimo)) / 864e5) : null;
     if (sem != null && sem >= 3 && I.pct < 1) at.push([3, o, `<span class="chip">sem registro há ${sem} d</span>`]);
     if (!I.ultimo) at.push([4, o, `<span class="chip">ainda sem registro em campo</span>`]);
+    if (I.rep) at.push([2, o, `<span class="chip bad">${I.rep} poste(s) reprovado(s) pelo fiscal</span>`]);
+    if (I.etapa === 'executada') at.push([1, o, `<span class="chip alt">executada · falta fiscalizar ${I.tot - I.fis} poste(s)</span>`]);
   }
   at.sort((a, b) => a[0] - b[0]);
   $('#aten').innerHTML = at.length ? `<table>${at.slice(0, 8).map(([, o, c]) => `<tr class="cl" data-o="${esc(o.id)}"><td><b>${esc(o.projeto)}</b><div class="small muted">${esc(o.empreiteira || '—')}${S.sess.length > 1 ? ' · ' + esc((sessObra(o) || {}).div || '') : ''}</div></td><td class="n">${c}</td></tr>`).join('')}</table>` : `<div class="muted small">Nada pendente.</div>`;
@@ -396,10 +416,10 @@ function vPainel(app) {
     const E = {};
     for (const o of ativas) {
       const I = S.idx[o.id]; const k = fk(o); const e = E[k] || (E[k] = { n: 0, us: 0, usE: 0, tot: 0, exec: 0, alt: 0, bad: 0, ult: null });
-      e.n++; e.us += o.us || 0; e.usE += I.usExec; e.tot += I.tot; e.exec += I.exec; e.alt += I.alt; e.bad += I.bad; if (I.ultimo && (!e.ult || I.ultimo > e.ult)) e.ult = I.ultimo
+      e.n++; e.us += o.us || 0; e.usE += I.usExec; e.usM = (e.usM || 0) + I.usMed; e.tot += I.tot; e.exec += I.exec; e.alt += I.alt; e.bad += I.bad; if (I.ultimo && (!e.ult || I.ultimo > e.ult)) e.ult = I.ultimo
     }
     const ks = Object.keys(E).sort((a, b) => E[b].us - E[a].us);
-    return ks.length ? `<table><thead><tr><th></th><th class="n">Obras</th><th class="n">US</th><th class="n">US exec.</th><th class="n">Postes</th><th>Avanço</th><th class="n">Alter.</th><th class="n">Não exec.</th><th>Último registro</th></tr></thead><tbody>${ks.map(k => { const e = E[k]; const p = e.tot ? e.exec / e.tot : 0; return `<tr><td><b>${esc(k)}</b></td><td class="n">${e.n}</td><td class="n">${fmt(e.us)}</td><td class="n">${fmt(e.usE)}</td><td class="n">${e.exec}/${e.tot}</td><td><div style="display:flex;gap:8px;align-items:center"><div class="bar" style="flex:1"><i class="b-ok" style="width:${p * 100}%"></i></div><span class="pct">${fmt1(p * 100)}%</span></div></td><td class="n">${e.alt}</td><td class="n">${e.bad}</td><td>${e.ult ? dtBR(e.ult) : '—'}</td></tr>` }).join('')}</tbody></table>` : `<div class="empty">Nenhuma obra em andamento.${souGestor() ? ' <a href="#nova">Empenhar a primeira obra</a>.' : ''}</div>`;
+    return ks.length ? `<table><thead><tr><th></th><th class="n">Obras</th><th class="n">US</th><th class="n">US exec.</th><th class="n">US medidas</th><th class="n">Postes</th><th>Avanço</th><th class="n">Alter.</th><th class="n">Não exec.</th><th>Último registro</th></tr></thead><tbody>${ks.map(k => { const e = E[k]; const p = e.tot ? e.exec / e.tot : 0; return `<tr><td><b>${esc(k)}</b></td><td class="n">${e.n}</td><td class="n">${fmt(e.us)}</td><td class="n">${fmt(e.usE)}</td><td class="n">${fmt(e.usM)}</td><td class="n">${e.exec}/${e.tot}</td><td><div style="display:flex;gap:8px;align-items:center"><div class="bar" style="flex:1"><i class="b-ok" style="width:${p * 100}%"></i></div><span class="pct">${fmt1(p * 100)}%</span></div></td><td class="n">${e.alt}</td><td class="n">${e.bad}</td><td>${e.ult ? dtBR(e.ult) : '—'}</td></tr>` }).join('')}</tbody></table>` : `<div class="empty">Nenhuma obra em andamento.${souGestor() ? ' <a href="#nova">Empenhar a primeira obra</a>.' : ''}</div>`;
   };
   $('#emp').innerHTML = agrupar(o => o.empreiteira || '(sem empreiteira)');
   $('#pdiv') && ($('#pdiv').innerHTML = agrupar(o => (sessObra(o) || {}).div || o.pref));
@@ -461,12 +481,12 @@ function vObras(app) {
   ligarFiltroDiv();
   const draw = () => {
     const q = FILT.q.toLowerCase();
-    const L = base.filter(o => (!FILT.emp || o.empreiteira === FILT.emp) && (!FILT.st || (FILT.st === 'ativa' ? (o.status !== 'concluida' && o.status !== 'cancelada') : o.status === FILT.st)) && (!q || [o.projeto, o.cliente, o.descricao, o.municipio, o.local, o.aes].join(' ').toLowerCase().includes(q)))
+    const L = base.filter(o => (!FILT.emp || o.empreiteira === FILT.emp) && (!FILT.st || (FILT.st === 'ativa' ? (o.status !== 'concluida' && o.status !== 'cancelada') : o.status === FILT.st)) && (!q || [o.projeto, o.pep, o.cliente, o.descricao, o.municipio, o.local, o.aes].join(' ').toLowerCase().includes(q)))
       .sort((a, b) => (b.criadoEm || '').localeCompare(a.criadoEm || ''));
-    $('#tb').innerHTML = L.length ? `<div style="overflow:auto"><table><thead><tr><th>Projeto</th><th>Obra / cliente</th>${S.sess.length > 1 ? '<th>Divisão</th>' : ''}<th>Município</th><th>Empreiteira</th><th class="n">US</th><th class="n">Postes</th><th style="width:150px">Avanço</th><th>Prazo</th><th>Último registro</th></tr></thead><tbody>${L.map(o => {
+    $('#tb').innerHTML = L.length ? `<div style="overflow:auto"><table><thead><tr><th>Projeto</th><th>Obra / cliente</th>${S.sess.length > 1 ? '<th>Divisão</th>' : ''}<th>Município</th><th>Empreiteira</th><th class="n">US</th><th>Etapa</th><th class="n">Postes</th><th style="width:150px">Avanço</th><th class="n">Medido</th><th>Prazo</th><th>Último registro</th></tr></thead><tbody>${L.map(o => {
       const I = S.idx[o.id]; const d = diasAte(o.prazo);
-      return `<tr class="cl" data-o="${esc(o.id)}"><td><b>${esc(o.projeto)}</b>${o.status === 'concluida' ? ' <span class="chip ok">concluída</span>' : ''}</td><td>${esc(o.descricao || '')}<div class="small muted">${esc(o.cliente || '')}</div></td>${S.sess.length > 1 ? `<td>${esc((sessObra(o) || {}).div || '')}</td>` : ''}<td>${esc(o.municipio || '—')}</td><td>${esc(o.empreiteira || '—')}</td><td class="n">${fmt(o.us)}</td><td class="n">${I.exec}/${I.tot}</td>
-      <td><div style="display:flex;gap:8px;align-items:center"><div class="bar" style="flex:1"><i class="b-ok" style="width:${I.ok / (I.tot || 1) * 100}%"></i><i class="b-alt" style="width:${I.alt / (I.tot || 1) * 100}%"></i><i class="b-bad" style="width:${I.bad / (I.tot || 1) * 100}%"></i></div><span class="pct">${fmt1(I.pct * 100)}%</span></div></td>
+      return `<tr class="cl" data-o="${esc(o.id)}"><td><b>${esc(o.projeto)}</b>${o.pep ? `<div class="small muted">PEP ${esc(o.pep)}</div>` : ''}</td><td>${esc(o.descricao || '')}<div class="small muted">${esc(o.cliente || '')}</div></td>${S.sess.length > 1 ? `<td>${esc((sessObra(o) || {}).div || '')}</td>` : ''}<td>${esc(o.municipio || '—')}</td><td>${esc(o.empreiteira || '—')}</td><td class="n">${fmt(o.us)}</td><td>${etapaChip(I)}</td><td class="n">${I.exec}/${I.tot}</td>
+      <td><div style="display:flex;gap:8px;align-items:center"><div class="bar" style="flex:1"><i class="b-ok" style="width:${I.ok / (I.tot || 1) * 100}%"></i><i class="b-alt" style="width:${I.alt / (I.tot || 1) * 100}%"></i><i class="b-bad" style="width:${I.bad / (I.tot || 1) * 100}%"></i></div><span class="pct">${fmt1(I.pct * 100)}%</span></div></td><td class="n"><b>${fmt1(I.pctFis * 100)}%</b><div class="small muted">${fmt(I.usMed)} US</div></td>
       <td>${dBR(o.prazo)}${d != null && I.pct < 1 && o.status !== 'concluida' ? (d < 0 ? ` <span class="chip bad">${-d} d atrasada</span>` : d <= 10 ? ` <span class="chip alt">${d} d</span>` : '') : ''}</td><td>${I.ultimo ? dtBR(I.ultimo) : '<span class="muted">—</span>'}</td></tr>`
     }).join('')}</tbody></table></div>`
       : `<div class="empty">${base.length ? 'Nenhuma obra com esses filtros.' : 'Nenhuma obra cadastrada ainda.'}${souGestor() && !base.length ? ' <a href="#nova">Empenhar a primeira obra</a>.' : ''}</div>`;
@@ -540,7 +560,7 @@ function vObra(app) {
   if (!o) { app.innerHTML = `<div class="card empty">Obra não encontrada. <a href="#obras">Voltar</a></div>`; return }
   SEL = null;
   app.innerHTML = `<div class="toolbar"><a href="#${hist ? 'historico' : 'obras'}" class="btn ghost sm" style="text-decoration:none">← ${hist ? 'Histórico' : 'Obras'}</a><h2 style="margin:0">Projeto ${esc(o.projeto)}</h2>${hist ? `<span class="chip ok">concluída ${dBR((o.concluidaEm || '').slice(0, 10))}</span>` : ''}<span class="muted">${esc(o.descricao || '')}</span><span style="flex:1"></span>
-    <div class="legend"><span style="--c:var(--pend)">a executar</span><span style="--c:var(--ok)">conforme</span><span style="--c:var(--alt)">com alteração</span><span style="--c:var(--bad)">não executado</span><span style="--c:var(--novo)">não previsto</span><span class="small">▢ quadrado = retirar</span></div></div>
+    <div class="legend"><span style="--c:var(--pend)">a executar</span><span style="--c:var(--ok)">conforme</span><span style="--c:var(--alt)">com alteração</span><span style="--c:var(--bad)">não executado</span><span style="--c:var(--novo)">não previsto</span><span class="small">✓ = aprovado pelo fiscal</span><span class="small">▢ quadrado = retirar</span></div></div>
    <div class="det"><div id="vw"></div><div class="grid" id="side"></div></div>`;
   const ps = plantaSrc(o);
   VIEWER = Viewer($('#vw'), { img: ps.src, imgAlt: ps.alt, iw: o.planta.w, ih: o.planta.h, fitMarkers: true, getMarkers: () => markersObra(o, SEL), onMarker: k => { SEL = k; VIEWER.refresh(); renderObraSide() } });
@@ -555,16 +575,21 @@ function renderObraSide() {
    <div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline"><h3 style="margin:0">Avanço</h3><b class="pct" style="font-size:22px;color:var(--or)">${fmt1(I.pct * 100)}%</b></div>
     <div class="bar" style="height:12px;margin:8px 0"><i class="b-ok" style="width:${I.ok / (I.tot || 1) * 100}%"></i><i class="b-alt" style="width:${I.alt / (I.tot || 1) * 100}%"></i><i class="b-bad" style="width:${I.bad / (I.tot || 1) * 100}%"></i></div>
     <div class="small">${I.exec} de ${I.tot} postes · ${I.ok} conforme · ${I.alt} com alteração · ${I.bad} não executado(s)${I.novos.length ? ` · ${I.novos.length} não previsto(s)` : ''}</div>
-    <div class="small muted" style="margin-top:4px">US: ${fmt(I.usExec)} de ${fmt(o.us)} (estimado pela proporção de postes)</div></div>
+    <div class="small muted" style="margin-top:4px">US executadas: ${fmt(I.usExec)} de ${fmt(o.us)} (proporção de postes)</div>
+    ${hist ? '' : `<div style="margin-top:10px">${etapaChip(I)}</div>`}
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:12px"><h3 style="margin:0">Fiscalização</h3><b class="pct" style="font-size:18px;color:var(--ok)">${fmt1(I.pctFis * 100)}%</b></div>
+    <div class="bar" style="height:8px;margin:6px 0"><i class="b-ok" style="width:${I.pctFis * 100}%"></i><i class="b-bad" style="width:${I.rep / (I.tot || 1) * 100}%"></i></div>
+    <div class="small">${I.fis} de ${I.tot} postes aprovados (medidos)${I.rep ? ` · <b style="color:var(--bad)">${I.rep} reprovado(s)</b>` : ''} · US medidas: ${fmt(I.usMed)}</div>
+    ${hist && o.encerramento ? `<div class="small muted" style="margin-top:6px">Encerramento: ${esc(o.encerramento)}</div>` : ''}</div>
    <div class="card"><h3>Dados do empenho</h3><div class="kv">
     ${S.sess.length > 1 ? `<b>Divisão</b><span>${esc((sessObra(o) || {}).div || '')}</span>` : ''}
-    <b>Empreiteira</b><span>${esc(o.empreiteira || '—')}</span><b>AES</b><span>${esc(o.aes || '—')}</span><b>US</b><span>${fmt(o.us)}</span>
+    <b>PEP</b><span>${esc(o.pep || '—')}</span><b>Empreiteira</b><span>${esc(o.empreiteira || '—')}</span><b>AES</b><span>${esc(o.aes || '—')}</span><b>US</b><span>${fmt(o.us)}</span>
     <b>Empenho</b><span>${dBR(o.empenhoEm)}</span><b>Prazo</b><span>${dBR(o.prazo)}${d != null && I.pct < 1 ? ` <span class="chip ${d < 0 ? 'bad' : d <= 10 ? 'alt' : ''}">${d < 0 ? -d + ' d atrasada' : d + ' d'}</span>` : ''}</span>
     <b>Cliente</b><span>${esc(o.cliente || '—')}</span><b>Local</b><span>${esc(o.local || '—')}</span><b>Município</b><span>${esc(o.municipio || '—')}</span>
     <b>OSE</b><span>${esc(o.ose || '—')}</span><b>Projetista</b><span>${esc(o.projetista || '—')}</span><b>Status</b><span>${o.status === 'concluida' ? '<span class="chip ok">concluída</span>' : '<span class="chip or">em andamento</span>'}</span>
    </div>
    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">${o.pdf ? `<a class="btn sm ghost" href="${esc(driveVer(o.pdf.id))}" target="_blank" rel="noopener" style="text-decoration:none">Abrir PDF do projeto</a>` : ''}
-    ${podeEditarObra(o) ? (hist ? `<button class="btn sm dk" id="reab">Reabrir obra</button>` : `<button class="btn sm ghost" id="edob">Editar dados</button><button class="btn sm dk" id="conc">Concluir obra</button>`) : ''}</div></div>
+    ${podeEditarObra(o) ? (hist ? `<button class="btn sm dk" id="reab">Reabrir obra</button>` : `<button class="btn sm ghost" id="edob">Editar dados</button><button class="btn sm dk" id="conc">Encerrar obra (manual)</button>`) : ''}</div></div>
    <div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">${SEL ? esc(rotuloPoste(o, SEL)) : 'Registros de campo'}</h3>${SEL ? `<button class="btn sm ghost" id="clr">Ver todos</button>` : ''}</div>
    ${SEL && SEL.startsWith('P') ? (() => { const p = o.postes.find(p => 'P' + p.n === SEL); return p && (p.estruturas || []).length ? `<div style="margin:8px 0">${estHtml(p)}</div>` : p && p.nota ? `<div class="small muted" style="margin:6px 0">Previsto: ${esc(p.nota)}</div>` : '' })() : ''}
    <div class="feed" style="margin-top:8px">${regs.length ? regs.map(r => regHtml(o, r)).join('') : `<div class="muted small">${SEL ? 'Nenhum registro para este poste.' : 'Nenhum registro em campo ainda.'}</div>`}</div></div>`;
@@ -572,9 +597,9 @@ function renderObraSide() {
   $('#edob') && ($('#edob').onclick = () => editarObra(o));
   $('#conc') && ($('#conc').onclick = async e => {
     const b = e.currentTarget;
-    if (!b.dataset.conf) { b.dataset.conf = 1; b.textContent = 'Confirmar: concluir e mover para o Histórico'; b.style.background = 'var(--bad)'; return }
+    if (!b.dataset.conf) { b.dataset.conf = 1; b.textContent = 'Confirmar: encerrar e mover para o Histórico'; b.style.background = 'var(--bad)'; return }
     b.disabled = true; b.textContent = 'Concluindo…';
-    try { await api(sessObra(o), 'concluir', { id: o.id }); toast('Obra concluída e movida para o Histórico'); await sincronizar(); go('historico') } catch (err) { b.disabled = false; b.textContent = 'Concluir obra'; delete b.dataset.conf; toast('Não foi possível concluir: ' + err.message, 1) }
+    try { await api(sessObra(o), 'concluir', { id: o.id }); toast('Obra encerrada e movida para o Histórico'); await sincronizar(); go('historico') } catch (err) { b.disabled = false; b.textContent = 'Encerrar obra (manual)'; delete b.dataset.conf; toast('Não foi possível concluir: ' + err.message, 1) }
   });
   $('#reab') && ($('#reab').onclick = async e => {
     const b = e.currentTarget; b.disabled = true; b.textContent = 'Reabrindo…';
@@ -628,6 +653,7 @@ function formCampos(o, emps, divs) {
    <datalist id="dlmun">${PRMAP.c.map(c => `<option value="${esc(c[0])}">`).join('')}</datalist>
    <div style="border-top:1px solid var(--ln);margin:14px 0 2px"></div>
    <label class="f">Empreiteira *</label><div id="empbox">${empCampoHtml(o.pref || (divs && divs[0] && divs[0].pref), o.empreiteira, emps)}</div>
+   <label class="f">PEP</label><input class="i" name="pep" value="${esc(o.pep || '')}" placeholder="Elemento PEP do projeto no SAP" autocapitalize="characters">
    <div class="row2"><div><label class="f">AES</label><input class="i" name="aes" value="${esc(o.aes || '')}"></div><div><label class="f">US *</label><input class="i" name="us" type="number" min="0" step="1" value="${o.us ?? ''}"></div></div>
    <div class="row2"><div><label class="f">Data do empenho</label><input class="i" name="empenhoEm" type="date" value="${esc(o.empenhoEm || hoje())}"></div><div><label class="f">Prazo de execução</label><input class="i" name="prazo" type="date" value="${esc(o.prazo || '')}"></div></div>`;
 }
@@ -646,7 +672,7 @@ function editarObra(o) {
 
 /* ================= histórico (obras concluídas) ================= */
 async function vHistorico(app) {
-  app.innerHTML = `<div class="card"><div class="toolbar"><h2 style="margin:0 12px 0 0">Histórico · obras concluídas</h2>
+  app.innerHTML = `<div class="card"><div class="toolbar"><h2 style="margin:0 12px 0 0">Histórico · obras encerradas</h2>
     <input class="i" id="hq" placeholder="Buscar projeto, cliente, município…" style="min-width:240px">${filtroDivHtml()}</div><div id="htb"><div class="empty">Carregando…</div></div></div>`;
   ligarFiltroDiv();
   const L = []; let erro = '';
@@ -659,10 +685,10 @@ async function vHistorico(app) {
   S.histLista = L;
   const draw = () => {
     const q = ($('#hq').value || '').toLowerCase();
-    const V = L.filter(o => !q || [o.projeto, o.cliente, o.descricao, o.municipio, o.empreiteira, o.aes].join(' ').toLowerCase().includes(q)).sort((a, b) => String(b.concluidaEm).localeCompare(String(a.concluidaEm)));
-    $('#htb').innerHTML = erro && !L.length ? `<div class="empty">${esc(erro)}</div>` : V.length ? `<div style="overflow:auto"><table><thead><tr><th>Projeto</th><th>Obra / cliente</th>${S.sess.length > 1 ? '<th>Divisão</th>' : ''}<th>Município</th><th>Empreiteira</th><th class="n">US</th><th class="n">US exec.</th><th class="n">Postes</th><th class="n">Alter.</th><th class="n">Não exec.</th><th>Concluída em</th></tr></thead><tbody>${V.map(o => {
-      const r = o.resumo || {}; return `<tr class="cl" data-h="${esc(o.id)}"><td><b>${esc(o.projeto)}</b></td><td>${esc(o.descricao || '')}<div class="small muted">${esc(o.cliente || '')}</div></td>${S.sess.length > 1 ? `<td>${esc((sessDe(o.pref) || {}).div || '')}</td>` : ''}<td>${esc(o.municipio || '—')}</td><td>${esc(o.empreiteira || '—')}</td><td class="n">${fmt(o.us)}</td><td class="n">${fmt(r.usExec)}</td><td class="n">${r.exec ?? '—'}/${r.tot ?? '—'}</td><td class="n">${r.alt ?? '—'}</td><td class="n">${r.bad ?? '—'}</td><td>${dBR(String(o.concluidaEm || '').slice(0, 10))}</td></tr>`
-    }).join('')}</tbody></table></div>` : `<div class="empty">Nenhuma obra concluída${q ? ' com essa busca' : ' ainda'}.</div>`;
+    const V = L.filter(o => !q || [o.projeto, o.pep, o.cliente, o.descricao, o.municipio, o.empreiteira, o.aes].join(' ').toLowerCase().includes(q)).sort((a, b) => String(b.concluidaEm).localeCompare(String(a.concluidaEm)));
+    $('#htb').innerHTML = erro && !L.length ? `<div class="empty">${esc(erro)}</div>` : V.length ? `<div style="overflow:auto"><table><thead><tr><th>Projeto</th><th>Obra / cliente</th>${S.sess.length > 1 ? '<th>Divisão</th>' : ''}<th>Município</th><th>Empreiteira</th><th class="n">US</th><th class="n">US exec.</th><th class="n">US medidas</th><th class="n">Postes</th><th class="n">Alter.</th><th>Encerramento</th></tr></thead><tbody>${V.map(o => {
+      const r = o.resumo || {}; return `<tr class="cl" data-h="${esc(o.id)}"><td><b>${esc(o.projeto)}</b>${o.pep ? `<div class="small muted">PEP ${esc(o.pep)}</div>` : ''}</td><td>${esc(o.descricao || '')}<div class="small muted">${esc(o.cliente || '')}</div></td>${S.sess.length > 1 ? `<td>${esc((sessDe(o.pref) || {}).div || '')}</td>` : ''}<td>${esc(o.municipio || '—')}</td><td>${esc(o.empreiteira || '—')}</td><td class="n">${fmt(o.us)}</td><td class="n">${fmt(r.usExec)}</td><td class="n">${fmt(r.usMedida)}</td><td class="n">${r.exec ?? '—'}/${r.tot ?? '—'}</td><td class="n">${r.alt ?? '—'}</td><td>${dBR(String(o.concluidaEm || '').slice(0, 10))}<div class="small muted">${esc(String(o.encerramento || '').split(' · ')[0])}</div></td></tr>`
+    }).join('')}</tbody></table></div>` : `<div class="empty">Nenhuma obra encerrada${q ? ' com essa busca' : ' ainda'}.</div>`;
     $$('[data-h]', app).forEach(el => el.onclick = () => go('hist-' + el.dataset.h));
   };
   $('#hq').oninput = draw; draw();
@@ -817,7 +843,7 @@ function vFlist(app) {
     const I = S.idx[o.id]; const d = diasAte(o.prazo); return `<div class="fcard" data-o="${esc(o.id)}"><div class="t"><b>${esc(o.projeto)}</b><span class="pct" style="color:var(--or)">${fmt1(I.pct * 100)}%</span></div>
      <div class="s">${esc(o.descricao || '')}${o.municipio ? ' · ' + esc(o.municipio) : ''}<br>${esc(o.empreiteira || '')}${o.prazo ? ` · prazo ${dBR(o.prazo)}${d != null && d < 0 && I.pct < 1 ? ' (vencido)' : ''}` : ''}</div>
      <div class="bar" style="height:10px"><i class="b-ok" style="width:${I.ok / (I.tot || 1) * 100}%"></i><i class="b-alt" style="width:${I.alt / (I.tot || 1) * 100}%"></i><i class="b-bad" style="width:${I.bad / (I.tot || 1) * 100}%"></i></div>
-     <div class="small muted" style="margin-top:6px">${I.exec} de ${I.tot} postes executados${I.pend ? ` · ${I.pend} aguardando envio` : ''}</div></div>`
+     <div class="small muted" style="margin-top:6px">${I.exec} de ${I.tot} executados · ${I.fis} fiscalizados${I.rep ? ` · <b style="color:var(--bad)">${I.rep} reprovado(s)</b>` : ''}${I.pend ? ` · ${I.pend} aguardando envio` : ''}</div><div style="margin-top:6px">${etapaChip(I)}</div></div>`
   }).join('')
       : `<div class="fcard empty">Nenhuma obra em andamento${copel ? '' : ' para ' + esc(s0.empresa)}.</div>`}</div>`;
   $('#envf') && ($('#envf').onclick = () => enviarFila());
@@ -844,7 +870,7 @@ function vFobra(app) {
 }
 function updFbot() {
   const o = S.obras.find(x => x.id === S.obraId); const el = $('#fsum'); if (!o || !el) return; const I = S.idx[o.id];
-  el.innerHTML = `<b>${I.exec}/${I.tot}</b> postes · <b style="color:var(--or)">${fmt1(I.pct * 100)}%</b>${I.pend ? ` · <span class="small muted">${I.pend} a enviar</span>` : ''}<div class="bar" style="margin-top:4px"><i class="b-ok" style="width:${I.ok / (I.tot || 1) * 100}%"></i><i class="b-alt" style="width:${I.alt / (I.tot || 1) * 100}%"></i><i class="b-bad" style="width:${I.bad / (I.tot || 1) * 100}%"></i></div>`
+  el.innerHTML = `<b>${I.exec}/${I.tot}</b> exec. · <b style="color:var(--ok)">${I.fis}</b> fisc. · <b style="color:var(--or)">${fmt1(I.pct * 100)}%</b>${I.pend ? ` · <span class="small muted">${I.pend} a enviar</span>` : ''}<div class="bar" style="margin-top:4px"><i class="b-ok" style="width:${I.ok / (I.tot || 1) * 100}%"></i><i class="b-alt" style="width:${I.alt / (I.tot || 1) * 100}%"></i><i class="b-bad" style="width:${I.bad / (I.tot || 1) * 100}%"></i></div>`
 }
 
 /* ---------- câmera dentro do app ---------- */
@@ -883,6 +909,7 @@ function abrirPoste(o, key, novoPos, rasc) {
   const novo = !key;
   const I = S.idx[o.id]; const st = key ? I.postes.get(key) : null;
   const pp = key && key.startsWith('P') ? (o.postes.find(p => 'P' + p.n === key) || {}) : {};
+  const fiscal = papelObra(o) !== 'empreiteira'; const executado = !!(st && st.last && EXEC.has(st.last.tipo)); const fAtual = fiscPoste(I, key);
   const prev = pp.nota || ''; const ret = pp.acao === 'retirar';
   const F = { tipo: novo ? 'novo' : null, alt: [], obs: '', foto: null, dataExec: hoje(), gps: null };
   if (rasc) { F.tipo = rasc.tipo || F.tipo; F.alt = rasc.alt || []; F.obs = rasc.obs || ''; F.dataExec = rasc.dataExec || F.dataExec }
@@ -895,6 +922,8 @@ function abrirPoste(o, key, novoPos, rasc) {
     <div style="display:flex;justify-content:space-between;align-items:center"><h4>${esc(titulo)}</h4><button class="btn sm ghost" id="shx">Fechar</button></div>
     ${(pp.estruturas || []).length ? `<div style="margin-top:8px">${estHtml(pp)}</div>` : prev ? `<div class="small" style="margin-top:6px;background:#f4f6f9;border-radius:8px;padding:8px">Previsto: ${esc(prev)}</div>` : ''}
     ${st && st.last ? `<div class="small" style="margin-top:6px">Situação atual: <span class="chip ${TIPO_CH[st.last.tipo]}">${esc(tipoTx(o, st.last))}</span>${st.last.pendente ? ' <span class="chip">aguardando envio</span>' : ''}</div>` : ''}
+    ${fAtual ? `<div class="small" style="margin-top:6px">Fiscalização: <span class="chip ${TIPO_CH[fAtual]}">${esc(TIPO_TX[fAtual])}</span></div>` : ''}
+    ${fiscal && executado ? `<div class="fiscbox"><div class="lbl">Fiscalização</div><div class="bigbtns"><button class="b1" data-t="aprovado">✔️ Aprovar · medido</button><button class="b3" data-t="reprovado">✖️ Reprovar</button></div></div>${novo ? '' : '<div class="lbl" style="margin-top:12px">Registrar execução</div>'}` : ''}
     ${novo ? `<div class="small muted" style="margin-top:6px">Registre o poste implantado fora do projeto. Descreva o que foi feito e tire a foto.</div>` : `
     <div class="bigbtns"><button class="b1" data-t="conforme">✅ ${ret ? 'Retirado' : 'Executado'} conforme projeto</button><button class="b2" data-t="alterado">✏️ ${ret ? 'Retirado' : 'Executado'} com alteração</button><button class="b3" data-t="nao">⛔ ${ret ? 'Não retirado' : 'Não executado'}</button></div>`}
     <div id="dyn"></div>
@@ -909,11 +938,11 @@ function abrirPoste(o, key, novoPos, rasc) {
   const fechar = () => { descartar(); closeLayer() };
   $('#shx').onclick = fechar; $('#shov').onclick = e => { if (e.target.id === 'shov') fechar() };
   const dyn = $('#dyn'); const LY = $('#layer');
-  const precisaFoto = () => F.tipo !== 'nao';
-  const valida = () => { const ok = F.tipo && (!precisaFoto() || F.foto) && (F.tipo !== 'alterado' || F.alt.length) && (F.tipo !== 'nao' || F.alt.length) && (F.tipo !== 'novo' || F.obs.trim()); $('#shok').disabled = !ok; $('#fobr').textContent = precisaFoto() ? '(obrigatória)' : '(opcional)' };
+  const precisaFoto = () => !['nao', 'aprovado', 'reprovado'].includes(F.tipo);
+  const valida = () => { const ok = F.tipo && (!precisaFoto() || F.foto) && (F.tipo !== 'alterado' || F.alt.length) && (F.tipo !== 'nao' || F.alt.length) && (F.tipo !== 'reprovado' || F.alt.length) && (F.tipo !== 'novo' || F.obs.trim()); $('#shok').disabled = !ok; $('#fobr').textContent = precisaFoto() ? '(obrigatória)' : '(opcional)' };
   function drawDyn() {
-    const lista = F.tipo === 'alterado' ? ALTERACOES : F.tipo === 'nao' ? PENDENCIAS : null;
-    dyn.innerHTML = (lista ? `<label class="f">${F.tipo === 'alterado' ? 'O que foi alterado?' : 'Motivo'}</label><div class="chips">${lista.map(a => `<button data-a="${esc(a)}" class="${F.alt.includes(a) ? 'on' : ''}">${esc(a)}</button>`).join('')}</div>` : '')
+    const lista = F.tipo === 'alterado' ? ALTERACOES : F.tipo === 'nao' ? PENDENCIAS : F.tipo === 'reprovado' ? MOTIVOS_REP : null;
+    dyn.innerHTML = (lista ? `<label class="f">${F.tipo === 'alterado' ? 'O que foi alterado?' : F.tipo === 'reprovado' ? 'Motivo da reprovação' : 'Motivo'}</label><div class="chips">${lista.map(a => `<button data-a="${esc(a)}" class="${F.alt.includes(a) ? 'on' : ''}">${esc(a)}</button>`).join('')}</div>` : '')
       + (F.tipo ? `<label class="f">${F.tipo === 'novo' ? 'O que foi feito? *' : 'Observação'}</label><textarea class="i" id="obs" placeholder="${F.tipo === 'alterado' ? 'Ex.: poste deslocado 5 m para não ficar em frente à garagem' : ''}">${esc(F.obs)}</textarea>` : '');
     $$('[data-a]', dyn).forEach(b => b.onclick = () => { const a = b.dataset.a; F.alt = F.alt.includes(a) ? F.alt.filter(x => x !== a) : [...F.alt, a]; b.classList.toggle('on'); valida(); guardar() });
     $('#obs') && ($('#obs').oninput = e => { F.obs = e.target.value; valida(); guardar() });
@@ -952,10 +981,11 @@ function abrirPoste(o, key, novoPos, rasc) {
     S.fila.push(item); reindex(); descartar(); closeLayer(); render(true);
     try {
       const s = sessObra(o);
-      await api(s, 'registrar', { registro: reg, foto: fotoB64 ? { b64: fotoB64 } : null });
+      const j = await api(s, 'registrar', { registro: reg, foto: fotoB64 ? { b64: fotoB64 } : null });
       await IDB.del('fila:' + reg.id).catch(() => { });
       S.fila = S.fila.filter(x => x.registro.id !== reg.id);
-      toast('Registro salvo'); sincronizar();
+      if (j.encerrada) { toast('Último poste aprovado: obra fiscalizada e encerrada (foi para o Histórico)'); await sincronizar(); go(S.mode === 'campo' ? 'campo' : 'historico') }
+      else { toast(F.tipo === 'aprovado' ? 'Poste aprovado' : F.tipo === 'reprovado' ? 'Poste reprovado' : 'Registro salvo'); sincronizar() }
     } catch (e) {
       if (e.rede) { toast('Sem sinal: registro guardado no celular e será enviado sozinho.'); setSt('sem conexão', true) }
       else { await IDB.del('fila:' + reg.id).catch(() => { }); S.fila = S.fila.filter(x => x.registro.id !== reg.id); reindex(); render(true); toast('Não foi possível salvar: ' + e.message, 1) }
