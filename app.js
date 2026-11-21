@@ -1,7 +1,7 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.7.0';
+const VERSAO_APP = '1.8.0';
 const LIB = {
   pdf: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   pdfw: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
@@ -111,6 +111,7 @@ function aplicar(raw, d) {
     for (const id in raw.registros) if (!vale.has(raw.registros[id].obra)) delete raw.registros[id];
   }
   if (Array.isArray(d.empreiteiras)) raw.empreiteiras = d.empreiteiras;
+  if (Array.isArray(d.aes)) raw.aes = d.aes;
   if (d.qtdHistorico != null) raw.qtdHistorico = d.qtdHistorico;
   raw.desde = d.incremental !== undefined ? d.agora : null; // servidor antigo: sempre completo
   return true;
@@ -699,7 +700,7 @@ function formCampos(o, emps, divs) {
    <div style="border-top:1px solid var(--ln);margin:14px 0 2px"></div>
    <label class="f">Empreiteira *</label><div id="empbox">${empCampoHtml(o.pref || (divs && divs[0] && divs[0].pref), o.empreiteira, emps)}</div>
    <label class="f">PEP</label><input class="i" name="pep" value="${esc(o.pep || '')}" placeholder="Elemento PEP do projeto no SAP" autocapitalize="characters">
-   <div class="row2"><div><label class="f">AES</label><input class="i" name="aes" value="${esc(o.aes || '')}"></div><div><label class="f">US *</label><input class="i" name="us" type="number" min="0" step="1" value="${o.us ?? ''}"></div></div>
+   <div class="row2"><div><label class="f">AES</label><input class="i" name="aes" value="${esc(o.aes || '')}"></div><div><label class="f">US *</label><input class="i" name="us" type="number" min="0" step="any" value="${o.us ?? ''}"></div></div>
    <div class="row2"><div><label class="f">Data do empenho</label><input class="i" name="empenhoEm" type="date" value="${esc(o.empenhoEm || hoje())}"></div><div><label class="f">Prazo de execução</label><input class="i" name="prazo" type="date" value="${esc(o.prazo || '')}"></div></div>`;
 }
 function lerForm(root){const v={};$$('[name]',root).forEach(i=>{v[i.name]=i.type==='number'?(i.value===''?null:Number(i.value)):i.value.trim()});return v}
@@ -752,20 +753,110 @@ async function vHObra(app) {
 
 /* ================= empenhar obra ================= */
 let NOVA = null;
+const fmtUs = n => (n == null || isNaN(n)) ? '—' : Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
+/* ================= AES: autorização para execução (vários projetos por empreiteira) ================= */
+const numBR = t => { if (t == null || t === '') return null; const v = Number(String(t).replace(/[R$\s]/g, '').replace(/\./g, '').replace(',', '.')); return isFinite(v) ? v : null };
+const dataISO = t => { const m = String(t || '').match(/(\d{2})[./](\d{2})[./](\d{4})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : '' };
+const normEmp = t => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9& ]/g, ' ').replace(/\b(ltda|me|epp|eireli|s ?a|cia|engenharia|construcoes|construtora|servicos|eletricos?|comercio)\b/g, ' ').replace(/\s+/g, ' ').trim();
+function casarEmpreiteira(nomeAes, lista) {
+  const a = normEmp(nomeAes); if (!a) return '';
+  return (lista || []).find(e => normEmp(e) === a) || (lista || []).find(e => { const b = normEmp(e); return b && (a.includes(b) || b.includes(a)) }) || '';
+}
+/** Lê o PDF da AES (gerado pelo SAP): cabeçalho e itens (projeto, PEP, US, prazo, custo). */
+async function lerAes(file) {
+  const lib = await pdfLib();
+  const doc = await lib.getDocument({ data: new Uint8Array(await file.arrayBuffer()), isEvalSupported: false, disableFontFace: true }).promise;
+  const linhas = [];
+  for (let i = 1; i <= Math.min(doc.numPages, 5); i++) {
+    const pg = await doc.getPage(i); const tc = await pg.getTextContent();
+    const its = tc.items.filter(t => t.str.trim()).map(t => ({ s: t.str, x: t.transform[4], y: Math.round(t.transform[5]), w: t.width }));
+    const grupos = [];
+    its.sort((a, b) => b.y - a.y || a.x - b.x).forEach(t => { const g = grupos.find(g => Math.abs(g.y - t.y) <= 2); g ? g.its.push(t) : grupos.push({ y: t.y, its: [t] }) });
+    grupos.forEach(g => { g.its.sort((a, b) => a.x - b.x); let txt = '', fim = null; g.its.forEach(t => { if (fim != null) txt += t.x - fim > 8 ? '   ' : (t.x - fim > 1.5 ? ' ' : ''); txt += t.s; fim = t.x + t.w }); linhas.push(txt.replace(/\s+$/, '')) });
+  }
+  const tudo = linhas.join('\n');
+  if (!/AES|AUTORIZA/i.test(tudo)) throw new Error('este PDF não parece uma AES');
+  const A = { itens: [] };
+  const mN = tudo.match(/\b(\d{5,7})\s+(\d{2}\.\d{2}\.\d{4})\b/); if (mN) { A.numero = mN[1]; A.data = dataISO(mN[2]) }
+  const idx = (re) => linhas.findIndex(l => re.test(l));
+  let k = idx(/ÓRGÃO EMITENTE|ORGAO EMITENTE/i); if (k >= 0 && linhas[k + 1]) A.orgao = linhas[k + 1].trim();
+  k = idx(/^\s*EMPREITEIRO\b.*CIDADE/i); if (k >= 0 && linhas[k + 1]) A.empreiteiraAes = linhas[k + 1].split(/\s{3,}/)[0].trim();
+  const cnpjs = (tudo.match(/\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/g) || []).filter(c => c !== '04.368.898/0001-06'); A.cnpj = cnpjs[0] || '';
+  k = idx(/^\s*CONTRATO\b.*TIPO CONTRATO/i); if (k >= 0) { const m = (linhas[k + 1] || '').match(/\b(\d{8,12})\b/); if (m) A.contrato = m[1] }
+  linhas.forEach(l => {
+    const m = l.match(/^\s*(\d{1,3})\s+(\S+)\s+([A-Z]-\d{2}-\d{5,})(?:\s+([A-Z]-\d{2}-\d{5,}))?\s+(.*?)\s*(\d{2}\/\d{2}\/\d{4})\s+([\d.,]+)\s+R\$\s*([\d.,]+)\s+(\d{5,9})\s*$/);
+    if (m) A.itens.push({ item: m[1], progOrc: m[2], pep: m[3], pepOdd: m[4] || '', tipoObra: m[5].replace(/\s{2,}/g, ' ').trim(), prazo: dataISO(m[6]), us: numBR(m[7]), custo: numBR(m[8]), projeto: m[9] });
+  });
+  const mt = tudo.match(/TOTAL:\s*([\d.,]+)\s+R\$\s*([\d.,]+)/); if (mt) { A.totalUs = numBR(mt[1]); A.totalCusto = numBR(mt[2]) }
+  if (!A.numero || !A.itens.length) throw new Error('não encontrei o número da AES ou os itens (projetos)');
+  return A;
+}
+const aesPendentes = pref => ((S.raw[pref] || {}).aes || []);
+function aesDoProjeto(proj, pref) {
+  const p = String(proj || '').replace(/\D/g, ''); if (p.length < 5) return null;
+  for (const s of S.sess.filter(s => s.papel === 'gestor' && (!pref || s.pref === pref))) { const a = aesPendentes(s.pref).find(x => String(x.projeto).replace(/\D/g, '') === p); if (a) return Object.assign({ pref: s.pref }, a) }
+  return null;
+}
+async function processarAes(file) {
+  const prog = $('#prog'); prog.textContent = 'Lendo a AES…';
+  let A; try { A = await lerAes(file) } catch (e) { console.error(e); prog.textContent = 'Não consegui ler a AES: ' + (e.message || e); return }
+  prog.textContent = '';
+  const divs = S.sess.filter(s => s.papel === 'gestor'); let pref = (S.divFiltro && divs.some(s => s.pref === S.divFiltro)) ? S.divFiltro : divs[0].pref;
+  const empSel = () => { const lista = S.emps[pref] || []; const casa = casarEmpreiteira(A.empreiteiraAes, lista); return `<select class="i" id="aemp"><option value="">Selecione…</option>${lista.map(e => `<option ${e === casa ? 'selected' : ''}>${esc(e)}</option>`).join('')}</select>${casa ? '' : `<div class="small" style="color:var(--bad);margin-top:4px">Não achei “${esc(A.empreiteiraAes || '?')}” na aba chaves. Escolha a empresa correspondente ou cadastre um código para ela.</div>`}` };
+  const ja = aesPendentes(pref).filter(x => x.aes === A.numero).length;
+  openLayer(`<div class="ov"><div class="box" style="max-width:820px"><h2>AES ${esc(A.numero)} · ${esc(A.empreiteiraAes || '')}</h2>
+    <div class="small muted">Emitida em ${A.data ? dBR(A.data) : '—'} · ${esc(A.orgao || '')} · contrato ${esc(A.contrato || '—')} · CNPJ ${esc(A.cnpj || '—')}</div>
+    ${divs.length > 1 ? `<label class="f">Divisão</label><select class="i" id="adiv">${divs.map(s => `<option value="${esc(s.pref)}" ${s.pref === pref ? 'selected' : ''}>${esc(s.div)}</option>`).join('')}</select>` : ''}
+    <label class="f">Empreiteira no app</label><div id="aempbox">${empSel()}</div>
+    <div style="overflow:auto;margin-top:12px"><table><thead><tr><th>Item</th><th>Projeto</th><th>PEP</th><th>Tipo</th><th>Prazo</th><th style="text-align:right">US</th><th style="text-align:right">Custo</th></tr></thead><tbody>
+    ${A.itens.map(it => `<tr><td>${esc(it.item)}</td><td><b>${esc(it.projeto)}</b></td><td>${esc(it.pep)}${it.pepOdd ? `<div class="small muted">${esc(it.pepOdd)}</div>` : ''}</td><td class="small">${esc(it.tipoObra)}</td><td>${it.prazo ? dBR(it.prazo) : '—'}</td><td style="text-align:right">${fmtUs(it.us)}</td><td style="text-align:right">${it.custo != null ? 'R$ ' + it.custo.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : ''}</td></tr>`).join('')}
+    </tbody>${A.totalUs != null ? `<tfoot><tr><td colspan="5"><b>Total</b></td><td style="text-align:right"><b>${fmtUs(A.totalUs)}</b></td><td style="text-align:right"><b>R$ ${(A.totalCusto || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</b></td></tr></tfoot>` : ''}</table></div>
+    ${ja ? `<div class="note" style="margin-top:10px">Esta AES já foi registrada. Registrar de novo atualiza os itens (sem duplicar).</div>` : ''}
+    <div class="note ok-note" style="margin-top:10px">Depois de registrar, suba os PDFs dos projetos: o app reconhece cada um pelo número e já preenche empreiteira, AES, PEP, US e prazo.</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px"><button class="btn ghost" id="ax">Cancelar</button><button class="btn pri" id="aok">Registrar AES (${A.itens.length} projeto${A.itens.length > 1 ? 's' : ''})</button></div></div></div>`);
+  $('#adiv') && ($('#adiv').onchange = e => { pref = e.target.value; $('#aempbox').innerHTML = empSel() });
+  $('#ax').onclick = closeLayer;
+  $('#aok').onclick = async e => {
+    const emp = $('#aemp').value; if (!emp) return toast('Escolha a empreiteira', 1);
+    const b = e.currentTarget; b.disabled = true; b.textContent = 'Registrando…';
+    try {
+      const j = await api(sessDe(pref), 'registrarAes', { aes: Object.assign({}, A, { empreiteira: emp }), pdf: file.size < 15e6 ? { b64: await blobB64(file) } : null });
+      closeLayer(); toast(`AES ${A.numero} registrada: ${j.novos} novo(s)${j.atualizados ? ', ' + j.atualizados + ' atualizado(s)' : ''}${j.vinculados ? ', ' + j.vinculados + ' ligado(s) a obras já empenhadas' : ''}`);
+      await sincronizar(); if (S.view === 'nova') vNova($('#app'));
+    } catch (err) { toast(msgServidor(err), 1); b.disabled = false; b.textContent = 'Registrar AES' }
+  };
+}
+function listaAesHtml() {
+  const L = []; S.sess.filter(s => s.papel === 'gestor').forEach(s => aesPendentes(s.pref).forEach(a => L.push(Object.assign({ pref: s.pref, div: s.div }, a))));
+  if (!L.length) return `<div class="small muted">Nenhum projeto aguardando PDF. Suba uma AES para começar.</div>`;
+  const porAes = {}; L.forEach(a => (porAes[a.pref + '|' + a.aes] = porAes[a.pref + '|' + a.aes] || []).push(a));
+  return Object.values(porAes).map(G => `<div style="border-top:1px solid var(--ln);padding:8px 0"><div style="display:flex;align-items:center;gap:8px"><b style="flex:1">AES ${esc(G[0].aes)} · ${esc(G[0].empreiteira)}</b><span class="small muted">${G[0].emitidaEm ? dBR(G[0].emitidaEm) : ''}</span><button class="btn sm ghost" data-rmaes="${esc(G[0].aes)}" data-pref="${esc(G[0].pref)}">Remover</button></div>
+    <div class="small" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">${G.map(a => `<span class="chip alt" title="PEP ${esc(a.pep)} · prazo ${a.prazo ? dBR(a.prazo) : '—'}">${esc(a.projeto)} · ${fmtUs(a.us)} US</span>`).join('')}</div></div>`).join('');
+}
 function vNova(app) {
   if (!souGestor()) { app.innerHTML = `<div class="card empty">Só o gestor pode empenhar obras.</div>`; return }
   if (NOVA && NOVA.modo === 'add') { editorNova(); return }
   NOVA = null;
-  app.innerHTML = `<div class="card" style="max-width:760px;margin:0 auto"><h2>Empenhar obra para uma empreiteira</h2>
-   <p class="muted" style="margin-top:0">Suba o PDF do projeto. O app lê o carimbo, localiza o município e marca os postes numerados da planta (todas as folhas do PDF). Depois você confere, ajusta e informa empreiteira, AES, US e prazo.</p>
-   <label class="drop" id="drop" style="display:block;cursor:pointer"><input type="file" accept="application/pdf" id="fpdf" class="hidden"><div style="font-size:15px;font-weight:700">Clique para escolher o PDF do projeto</div><div class="small muted" style="margin-top:4px">ou arraste o arquivo para cá</div></label>
-   <div id="prog" class="small muted" style="margin-top:10px"></div></div>`;
-  const drop = $('#drop');
-  ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over') }));
-  ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over') }));
-  drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; f && processarPdf(f) });
-  $('#fpdf').onchange = e => { const f = e.target.files[0]; f && processarPdf(f) };
+  app.innerHTML = `<div style="max-width:820px;margin:0 auto;display:grid;gap:14px">
+   <div class="card"><h2 style="margin-top:0">1 · Subir a AES</h2>
+    <p class="muted" style="margin-top:0">O PDF da AES gerada no empenho. O app lê a empreiteira, o contrato e cada projeto com PEP, US e prazo.</p>
+    <label class="drop" id="dropa" style="display:block;cursor:pointer;padding:18px"><input type="file" accept="application/pdf" id="faes" class="hidden"><div style="font-weight:700">Escolher o PDF da AES</div><div class="small muted">ou arraste para cá</div></label>
+    <div style="margin-top:12px"><b class="small">Projetos aguardando o PDF</b><div id="aesl" style="margin-top:4px">${listaAesHtml()}</div></div></div>
+   <div class="card"><h2 style="margin-top:0">2 · Subir os PDFs dos projetos</h2>
+    <p class="muted" style="margin-top:0">Pode selecionar vários de uma vez. Cada um é reconhecido pelo número do projeto e já vem com os dados da AES; você só confere os postes da planta e empenha. Projeto sem AES também funciona: aí os dados são preenchidos à mão.</p>
+    <label class="drop" id="drop" style="display:block;cursor:pointer"><input type="file" accept="application/pdf" id="fpdf" class="hidden" multiple><div style="font-size:15px;font-weight:700">Escolher os PDFs dos projetos</div><div class="small muted" style="margin-top:4px">ou arraste os arquivos para cá</div></label>
+   </div><div id="prog" class="small muted"></div></div>`;
+  const ligar = (drop, inp, fn) => {
+    ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over') }));
+    ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over') }));
+    drop.addEventListener('drop', e => fn([...e.dataTransfer.files].filter(f => /pdf$/i.test(f.name) || f.type === 'application/pdf')));
+    inp.onchange = e => fn([...e.target.files]);
+  };
+  ligar($('#dropa'), $('#faes'), fs => fs[0] && processarAes(fs[0]));
+  ligar($('#drop'), $('#fpdf'), fs => { if (!fs.length) return; FILA_PDF = fs.slice(1); processarPdf(fs[0]) });
+  $$('[data-rmaes]', app).forEach(b => b.onclick = async () => { if (!b.dataset.conf) { b.dataset.conf = 1; b.textContent = 'Confirmar remoção'; return } b.disabled = true; try { await api(sessDe(b.dataset.pref), 'removerAes', { aes: b.dataset.rmaes }); toast('AES removida'); await sincronizar(); vNova(app) } catch (e) { toast(msgServidor(e), 1); b.disabled = false } });
 }
+let FILA_PDF = [];
 function loadScript(src){return new Promise((ok,ko)=>{const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=()=>ko(new Error('não carregou '+src));document.head.appendChild(s)})}
 async function pdfLib() { if (window.pdfjsLib) return window.pdfjsLib; await loadScript(LIB.pdfw); await loadScript(LIB.pdf); return window.pdfjsLib }
 function escolherPdf(cb) { const i = document.createElement('input'); i.type = 'file'; i.accept = 'application/pdf'; i.onchange = () => { const f = i.files[0]; f && cb(f) }; i.click() }
@@ -832,9 +923,21 @@ async function processarPdf(file, obraAdd) {
       postes: J.postes, rep: J.rep, total, ignoradas,
       campos: { ...campos, municipio, empenhoEm: hoje(), pref: obraAdd ? obraAdd.pref : (S.divFiltro && divs.some(s => s.pref === S.divFiltro) ? S.divFiltro : (divs[0] || {}).pref) }, loc, utm, sel: null, divs
     };
+    if (!obraAdd) aplicarAes(NOVA);
     closeLayer();
     if (obraAdd) go('nova'); else editorNova();
   } catch (e) { console.error(e); st('Não consegui ler este PDF: ' + (e.message || e)); toast('Erro ao ler o PDF', 1); if (obraAdd) setTimeout(closeLayer, 3500) }
+}
+/** Completa o empenho com o item da AES do mesmo projeto. */
+function aplicarAes(N) {
+  const a = aesDoProjeto(N.campos.projeto); if (!a) return;
+  N.aesItem = a;
+  Object.assign(N.campos, { projeto: String(a.projeto), pref: a.pref, empreiteira: a.empreiteira, aes: a.aes, pep: a.pep || N.campos.pep, us: a.us, prazo: a.prazo || N.campos.prazo, empenhoEm: a.emitidaEm || N.campos.empenhoEm });
+}
+function aesNotaHtml(N) {
+  const a = N.aesItem;
+  if (a) return `<div class="note ok-note" style="margin-top:10px">✔ Dados puxados da <b>AES ${esc(a.aes)}</b> (item ${esc(a.item)}): ${esc(a.empreiteira)} · PEP ${esc(a.pep || '—')} · ${fmtUs(a.us)} US · prazo ${a.prazo ? dBR(a.prazo) : '—'}. É só conferir os postes e empenhar.</div>`;
+  return `<div class="note" style="margin-top:10px">O projeto ${esc(N.campos.projeto || '(sem número)')} não está em nenhuma AES registrada. Preencha os dados abaixo ou volte e suba a AES primeiro.</div>`;
 }
 function editorNova() {
   const app = $('#app'); const N = NOVA; const add = N.modo === 'add';
@@ -851,6 +954,7 @@ function editorNova() {
     ${ja ? `<div class="note" style="margin-top:10px">Já existe uma obra com o projeto ${esc(ja.projeto)}. Salvar vai criar outra obra separada. Para incluir folhas numa obra que já existe, abra a obra e use “+ Adicionar folha”.</div>` : ''}
     ${add ? `<div class="note" style="margin-top:10px;background:#f4f6f9;border-color:var(--ln);color:var(--tx)">As folhas e os postes daqui vão ser acrescentados à obra ${esc(N.obra.projeto)} (hoje com ${N.obra.folhas.length} folha${N.obra.folhas.length > 1 ? 's' : ''} e ${(N.obra.postes || []).length} postes). Número de poste que já existe na obra não é repetido.${N.ignoradas ? ` ${N.ignoradas} folha(s) do PDF já estavam na obra e foram ignoradas.` : ''}</div>`
       : `<div class="note" style="margin-top:10px;background:#f4f6f9;border-color:var(--ln);color:var(--tx)">Localização: ${N.loc ? (N.loc.src === 'utm' ? `coordenada UTM do desenho (${fmt1(N.utm.e)}, ${fmt1(N.utm.n)})` : N.loc.src === 'coordenada' ? `coordenada do desenho (${N.loc.lat}, ${N.loc.lon})` : `centro do município de ${esc(N.campos.municipio)}`) : 'não encontrada no PDF. Informe o município ou ela virá do GPS dos registros.'}</div>`}
+    ${add ? '' : `<div id="aesnote">${aesNotaHtml(N)}</div>`}
     <div id="nf" class="${add ? 'hidden' : ''}">${add ? '' : formCampos(N.campos, emps, N.divs)}</div>
     <button class="btn pri" id="salvar" style="width:100%;margin-top:16px;padding:12px">${add ? 'Adicionar à obra' : 'Empenhar obra'}</button>
     <div class="small muted" id="sst" style="margin-top:8px"></div>
@@ -891,7 +995,7 @@ function editorNova() {
     }
   }
   mount(); side();
-  $('#vol').onclick = () => { if (add) { const id = N.obra.id; NOVA = null; go('obra-' + id) } else vNova(app) };
+  $('#vol').onclick = () => { if (add) { const id = N.obra.id; NOVA = null; go('obra-' + id) } else { FILA_PDF = []; vNova(app) } };
   $('#add').onclick = () => ed.setPlacing(!ed.placing, 'Clique na planta onde fica o novo poste');
   $('#ren') && ($('#ren').onclick = () => { N.postes.sort((a, b) => (a.f || 0) - (b.f || 0) || a.n - b.n).forEach((p, i) => p.n = i + 1); N.rep = []; N.sel = null; ed.refresh(); side(); toast('Postes renumerados de 1 a ' + N.postes.length) });
   $('#maisf').onclick = () => escolherPdf(async f => {
@@ -914,7 +1018,12 @@ function editorNova() {
     N.postes = N.postes.filter(p => (p.f || 0) !== f).map(p => (p.f || 0) > f ? { ...p, f: p.f - 1 } : p);
     N.f = Math.max(0, f - 1); N.sel = null; mount(); side();
   };
-  if (!add) ligarTrocaDivisao($('#nf'));
+  if (!add) {
+    ligarTrocaDivisao($('#nf'));
+    const pj = $('[name=projeto]', $('#nf'));
+    pj && (pj.onchange = () => { Object.assign(N.campos, lerForm($('#nf'))); delete N.aesItem; aplicarAes(N); $('#nf').innerHTML = formCampos(N.campos, emps, N.divs); $('#aesnote').innerHTML = aesNotaHtml(N); ligarTrocaDivisao($('#nf')); editorNova() });
+  }
+  if (FILA_PDF.length && !add) $('#sst').textContent = `Depois deste, ${FILA_PDF.length} PDF(s) na fila.`;
   $('#salvar').onclick = add ? salvarFolhasObra : salvarNova;
 }
 async function salvarNova() {
@@ -935,9 +1044,10 @@ async function salvarNova() {
     const pdfB64 = N.file.size < 25e6 ? await blobB64(N.file) : null;
     sst.textContent = `Enviando para a ${s.div}… (pode levar alguns segundos${folhas.length ? ', são ' + N.folhas.length + ' folhas' : ''})`;
     const obra = Object.assign({}, v, { postes: N.postes.map(p => ({ n: p.n, x: p.x, y: p.y, nota: p.nota || '', acao: p.acao || '', estruturas: p.estruturas || [], f: p.f || 0 })), lat: loc ? loc.lat : '', lon: loc ? loc.lon : '', locOrigem: loc ? loc.src : '' });
-    const j = await api(s, 'empenhar', { obra, planta: { b64: plantaB64, w: N.folhas[0].w, h: N.folhas[0].h }, folhas, pdf: pdfB64 ? { b64: pdfB64, nome: N.file.name } : null });
-    toast('Obra empenhada'); NOVA = null;
-    await sincronizar(); go('obra-' + j.id);
+    const j = await api(s, 'empenhar', { aesItem: N.aesItem && N.aesItem.pref === s.pref ? N.aesItem.id : null, obra, planta: { b64: plantaB64, w: N.folhas[0].w, h: N.folhas[0].h }, folhas, pdf: pdfB64 ? { b64: pdfB64, nome: N.file.name } : null });
+    toast('Obra ' + v.projeto + ' empenhada'); NOVA = null;
+    await sincronizar();
+    if (FILA_PDF.length) { const f = FILA_PDF.shift(); processarPdf(f) } else go('obra-' + j.id);
   } catch (e) { console.error(e); btn.disabled = false; sst.textContent = ''; toast(msgServidor(e), 1) }
 }
 async function salvarFolhasObra() {

@@ -7,7 +7,7 @@
  * Para atualizar o código depois: Implantar > Gerenciar implantações > ✏️ > Versão: Nova versão > Implantar.
  * NUNCA use "Nova implantação" de novo, porque o endereço muda e o app perde a conexão.
  */
-const VERSAO_SERVIDOR = '1.6';
+const VERSAO_SERVIDOR = '1.7';
 
 const COLS_OBRAS = ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us',
   'empenhoEm', 'prazo', 'status', 'lat', 'lon', 'locOrigem', 'plantaId', 'plantaW', 'plantaH', 'pdfId', 'pdfNome',
@@ -19,6 +19,8 @@ const COLS_DOCS = ['id', 'obra', 'projeto', 'pep', 'empreiteira', 'tipo', 'nome'
 const TIPOS_DOC = ['BMD', 'FF', 'Vistoria', 'Outro'];
 const COLS_ASS = ['id', 'empresa', 'nome', 'cargo', 'imgId', 'pinHash', 'sal', 'criadoEm', 'criadoPor', 'ativo', 'tentativas', 'ultimoUso', 'aceiteTermo'];
 const TERMO_VERSAO = 'termo-v1';
+const COLS_AES = ['id', 'aes', 'emitidaEm', 'orgao', 'empreiteiraAes', 'cnpj', 'empreiteira', 'contrato', 'item', 'progOrc', 'pep', 'pepOdd',
+  'tipoObra', 'prazo', 'us', 'custo', 'projeto', 'obra', 'pdfId', 'criadoPor', 'criadoEm', 'alteradoEm'];
 const ABAS = {
   obras: COLS_OBRAS,
   registros: COLS_REGS,
@@ -27,10 +29,11 @@ const ABAS = {
   obras_historico: COLS_OBRAS,
   registros_historico: COLS_REGS,
   documentos: COLS_DOCS,
-  assinantes: COLS_ASS
+  assinantes: COLS_ASS,
+  aes: COLS_AES
 };
 const COL_DATA = ['empenhoEm', 'prazo', 'dataExec'];
-const COL_NUM = ['us', 'lat', 'lon', 'plantaW', 'plantaH', 'precisao', 'x', 'y', 'folha'];
+const COL_NUM = ['us', 'lat', 'lon', 'plantaW', 'plantaH', 'precisao', 'x', 'y', 'folha', 'custo'];
 const PAPEIS = ['gestor', 'fiscal', 'empreiteira'];
 /** Papel tolerante a digitação: "Empreiteria", "empreiteira " etc. viram "empreiteira". */
 function normPapel(v) {
@@ -181,6 +184,8 @@ function doPost(e) {
       case 'assinarDocumento': return json(assinarDocumento(p, req));
       case 'removerDocumento': return json(removerDocumento(p, req));
       case 'assinantes': return json(assinantes(p, req));
+      case 'registrarAes': return json(registrarAes(p, req));
+      case 'removerAes': return json(removerAes(p, req));
       case 'cadastrarAssinante': return json(cadastrarAssinante(p, req));
       case 'imgAssinante': return json(imgAssinante(p, req));
       case 'revogarAssinante': return json(revogarAssinante(p, req));
@@ -218,6 +223,7 @@ function dados(p, req) {
   };
   if (p.papel !== 'empreiteira') out.empreiteiras = listaEmpreiteiras();
   out.docs = resumoDocs(p);
+  if (p.papel === 'gestor') out.aes = ler('aes').filter(function (a) { return !a.obra; });
   return out;
 }
 function normObra(o) {
@@ -275,7 +281,11 @@ function empenhar(p, req) {
   linha.criadoPor = p.responsavel || p.chave;
   linha.criadoEm = agoraIso();
   linha.atualizadoEm = linha.criadoEm;
-  comTrava(function () { anexar('obras', linha); marcarAlteracao(); });
+  comTrava(function () {
+    anexar('obras', linha);
+    if (req.aesItem) atualizarLinha('aes', req.aesItem, { obra: id, alteradoEm: agoraIso() });
+    marcarAlteracao();
+  });
   return { ok: true, id: id };
 }
 
@@ -815,4 +825,63 @@ function conferirPin(p, id, pin) {
   }
   comTrava(function () { atualizarLinha('assinantes', a.id, { tentativas: '0', ultimoUso: agoraIso() }); });
   return { ok: true, assinante: a };
+}
+
+/* ============================ AES (autorização para execução) ============================ */
+/** Registra os itens (projetos) de uma AES. Reenviar a mesma AES atualiza os itens, sem duplicar. */
+function registrarAes(p, req) {
+  if (p.papel !== 'gestor') return { ok: false, erro: 'só o gestor registra AES' };
+  const a = req.aes || {};
+  if (!a.numero || !a.itens || !a.itens.length) return { ok: false, erro: 'AES sem número ou sem itens' };
+  if (!a.empreiteira) return { ok: false, erro: 'informe a empreiteira (como está na aba chaves)' };
+  let pdfId = '';
+  if (req.pdf && req.pdf.b64) {
+    pdfId = DriveApp.getFolderById(lerConfig().pastaPdfs).createFile(Utilities.newBlob(Utilities.base64Decode(req.pdf.b64), 'application/pdf', 'AES_' + a.numero + '.pdf')).getId();
+  }
+  const agora = agoraIso();
+  const obras = ler('obras');
+  let novos = 0, atualizados = 0, vinculados = 0;
+  comTrava(function () {
+    a.itens.forEach(function (it) {
+      const id = 'AES' + a.numero + '-' + it.item;
+      const campos = { aes: a.numero, emitidaEm: a.data || '', orgao: a.orgao || '', empreiteiraAes: a.empreiteiraAes || '', cnpj: a.cnpj || '', empreiteira: a.empreiteira,
+        contrato: a.contrato || '', item: it.item, progOrc: it.progOrc || '', pep: it.pep || '', pepOdd: it.pepOdd || '', tipoObra: it.tipoObra || '',
+        prazo: it.prazo || '', us: it.us, custo: it.custo, projeto: String(it.projeto || ''), alteradoEm: agora };
+      if (pdfId) campos.pdfId = pdfId;
+      // obra do mesmo projeto já empenhada antes da AES: vincula e completa o que estiver vazio
+      const ob = obras.filter(function (o) { return String(o.projeto) === String(it.projeto); })[0];
+      const existente = buscarLinha('aes', id);
+      if (existente) { atualizarLinha('aes', id, campos); atualizados++; }
+      else { campos.id = id; campos.criadoPor = p.responsavel || p.chave; campos.criadoEm = agora; campos.obra = ''; anexar('aes', campos); novos++; }
+      if (ob) {
+        const lin = ler('aes').filter(function (x) { return x.id === id; })[0];
+        if (lin && !lin.obra) {
+          atualizarLinha('aes', id, { obra: ob.id });
+          const comp = {};
+          if (!ob.aes) comp.aes = a.numero;
+          if (!ob.pep && it.pep) comp.pep = it.pep;
+          if (!ob.prazo && it.prazo) comp.prazo = it.prazo;
+          comp.atualizadoEm = agora;
+          atualizarLinha('obras', ob.id, comp);
+          vinculados++;
+        }
+      }
+    });
+    marcarAlteracao();
+  });
+  return { ok: true, novos: novos, atualizados: atualizados, vinculados: vinculados };
+}
+function removerAes(p, req) {
+  if (p.papel !== 'gestor') return { ok: false, erro: 'sem permissão' };
+  let n = 0;
+  comTrava(function () {
+    const sh = aba('aes'); const L = ler('aes');
+    for (let i = L.length - 1; i >= 0; i--) {
+      if (L[i].aes === String(req.aes) && !L[i].obra && (!req.item || String(L[i].item) === String(req.item))) {
+        const row = buscarLinha('aes', L[i].id); if (row) { sh.deleteRow(row); n++; }
+      }
+    }
+    if (n) marcarAlteracao();
+  });
+  return { ok: true, removidos: n };
 }
