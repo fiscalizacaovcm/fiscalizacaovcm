@@ -92,6 +92,8 @@ textarea.i{min-height:64px;resize:vertical}
 .viewer .stage img{display:block;pointer-events:none;-webkit-user-drag:none}
 .viewer .mk{position:absolute;width:30px;height:30px;margin:-15px 0 0 -15px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12.5px;color:#fff;background:var(--pend);border:2.5px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.45);transform:scale(var(--inv,1));cursor:pointer}
 .viewer .mk.ok{background:var(--ok)}.viewer .mk.alt{background:var(--alt)}.viewer .mk.bad{background:var(--bad)}.viewer .mk.novo{background:var(--novo)}
+.viewer .mk.pdesel{outline:3px solid #2563eb;outline-offset:2px;box-shadow:0 0 0 7px rgba(37,99,235,.28)}
+.viewer .mk.dim{opacity:.35}
 .viewer .mk.sel{outline:3px solid var(--or);outline-offset:2px}
 .viewer .mk.pend{border-style:dashed;opacity:.85}
 .viewer .mk.ed{background:var(--or);color:var(--nv)}
@@ -211,6 +213,7 @@ body{padding-top:env(safe-area-inset-top)}
     <a href="#obras" data-v="obras">Obras</a>
     <a href="#historico" data-v="historico">Histórico</a>
     <a href="#docs" data-v="docs">Assinaturas</a>
+    <a href="#pdes" data-v="pdes">PDE/PLV</a>
     <a href="#fluxo" data-v="fluxo">Fluxo</a>
     <a href="#nova" data-v="nova" id="navnova">Empenhar obra</a>
   </nav>

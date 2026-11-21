@@ -1,7 +1,7 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.11.0';
+const VERSAO_APP = '1.12.0';
 const LIB = {
   pdf: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   pdfw: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
@@ -139,6 +139,8 @@ async function sincronizar(op) {
     try {
       const d = await api(s, 'dados', raw.desde && !completo ? { desde: raw.desde } : {});
       if (d.docs && JSON.stringify(d.docs) !== JSON.stringify(raw.docs)) { raw.docs = d.docs; mudou = true }
+      if (d.pde && JSON.stringify(d.pde) !== JSON.stringify(raw.pde)) { raw.pde = d.pde; mudou = true }
+      if (Array.isArray(d.fiscais)) raw.fiscais = d.fiscais;
       if (aplicar(raw, d)) mudou = true;
       IDB.set('cache:' + s.pref, raw).catch(() => { });
     } catch (e) {
@@ -331,6 +333,7 @@ function route() {
   else if (h === 'assinar' || /^doc-/.test(h)) { S.mode = soCampo ? 'campo' : (h === 'assinar' ? 'campo' : (S.mode || 'gestao')); S.view = h === 'assinar' ? 'assinar' : 'doc'; S.docId = h.slice(4) }
   else if (h === 'docs' && !soCampo) { S.mode = 'gestao'; S.view = 'docs' }
   else if (h === 'assinatura') { S.mode = 'campo'; S.view = 'assinatura' }
+  else if (h === 'pdes') { S.mode = soCampo ? 'campo' : (S.mode || 'gestao'); S.view = 'pdes' }
   else if (h === 'fluxo') { S.mode = soCampo ? 'campo' : (S.mode || 'gestao'); S.view = 'fluxo' }
   else if (m || soCampo) { S.mode = 'campo'; S.view = m && m[2] ? 'fobra' : 'flist'; S.obraId = m && m[2] ? m[2] : null }
   else {
@@ -360,13 +363,13 @@ let VIEWER = null;
 function render(fromData) {
   const app = $('#app');
   if (S.view === 'login') { vLogin(app); return }
-  if (fromData && (S.view === 'nova' || S.view === 'conta' || S.view === 'historico' || S.view === 'hobra' || S.view === 'docs' || S.view === 'doc' || S.view === 'assinar' || S.view === 'assinatura' || S.view === 'fluxo')) return;
+  if (fromData && (S.view === 'nova' || S.view === 'conta' || S.view === 'historico' || S.view === 'hobra' || S.view === 'docs' || S.view === 'doc' || S.view === 'assinar' || S.view === 'assinatura' || S.view === 'fluxo' || S.view === 'pdes')) return;
   if (fromData && S.view === 'fobra' && VIEWER && VIEWER.obraId === S.obraId) { VIEWER.refresh(); updFbot(); return }
   if (fromData && S.view === 'obra' && VIEWER && VIEWER.obraId === S.obraId) { VIEWER.refresh(); renderObraSide(); return }
   if (S.view === 'conta') { VIEWER = null; vConta(app); return }
   if (!S.carregado) { app.innerHTML = `<div class="empty">Carregando…</div>`; return }
   VIEWER = null;
-  ({ painel: vPainel, obras: vObras, nova: vNova, obra: vObra, flist: vFlist, fobra: vFobra, historico: vHistorico, hobra: vHObra, docs: vDocs, doc: vDoc, assinar: vAssinar, assinatura: vAssinatura, fluxo: vFluxo }[S.view] || vPainel)(app);
+  ({ painel: vPainel, obras: vObras, nova: vNova, obra: vObra, flist: vFlist, fobra: vFobra, historico: vHistorico, hobra: vHObra, docs: vDocs, doc: vDoc, assinar: vAssinar, assinatura: vAssinatura, fluxo: vFluxo, pdes: vPdes }[S.view] || vPainel)(app);
 }
 function filtroDivHtml() {
   if (S.sess.length < 2) return '';
@@ -405,6 +408,7 @@ function vPainel(app) {
   <div class="card" style="margin-top:14px"><h2>Por empreiteira</h2><div id="emp"></div></div>`;
   ligarFiltroDiv();
   alertaArmazenamento(app);
+  { const r = pdeResumo(); if (r.sol) { const d = document.createElement('a'); d.href = '#pdes'; d.className = 'note'; d.style.cssText = 'display:block;margin-bottom:12px;background:#fff7ed;border-color:#fed7aa;color:#9a3412;text-decoration:none'; d.innerHTML = `📋 <b>${r.sol}</b> pedido(s) de PDE/PLV aguardando análise do fiscal. Toque para ver.`; app.prepend(d) } }
   desenharMapa($('#mapa'), ativas.length ? ativas : base);
   desenharGrafico($('#graf'), ativas);
   const at = [];
@@ -585,7 +589,7 @@ function montarPlanta(o, opts) {
   if (FOLHA >= o.folhas.length) FOLHA = 0;
   const fo = o.folhas[FOLHA], W = Math.max(fo.w, fo.h);
   const host = hostLimpo('#vw');
-  const v = Viewer(host, { img: driveImg(fo.id, W), imgAlt: driveImg2(fo.id, W), iw: fo.w, ih: fo.h, fitMarkers: true, getMarkers: () => markersObra(o, opts.getSel ? opts.getSel() : null, FOLHA), onMarker: opts.onMarker, onPlace: opts.onPlace });
+  const v = Viewer(host, { img: driveImg(fo.id, W), imgAlt: driveImg2(fo.id, W), iw: fo.w, ih: fo.h, fitMarkers: true, getMarkers: () => { const L = markersObra(o, opts.getSel ? opts.getSel() : null, FOLHA); return opts.decorar ? opts.decorar(L) : L }, onMarker: opts.onMarker, onPlace: opts.onPlace });
   v.obraId = o.id;
   abasFolhas(host, o.folhas.length, FOLHA, i => `Folha ${i + 1} · ${markersObra(o, null, i).length}`, i => { FOLHA = i; VIEWER = montarPlanta(o, opts) });
   return v;
@@ -1128,6 +1132,7 @@ function vFlist(app) {
   app.innerHTML = `<div class="fhead"><div class="who"><div><b>${esc(S.nome)}</b><div class="small muted">${copel ? 'Copel · fiscalização' : esc(s0.empresa)} · ${esc(S.sess.map(s => s.div).join(', '))}</div></div><a class="btn sm ghost" href="#conta" style="text-decoration:none">Conta</a></div>
    ${S.fila.length ? `<div class="note" style="margin-top:10px">${S.fila.length} registro(s) aguardando sinal para enviar. <button class="btn sm" id="envf">Tentar agora</button></div>` : ''}
    ${!copel && docsTotal() ? `<a class="fcard" href="#assinar" style="display:block;margin-top:10px;text-decoration:none;color:inherit;${docsPend() ? 'background:#fff7ed;border:1px solid #fed7aa' : ''}"><b>📄 ${docsPend() ? docsPend() + ' documento(s) aguardando sua assinatura' : 'Documentos assinados'}</b><div class="small muted">BMD, FF e vistoria enviados pela Copel${docsPend() ? ' · toque para assinar' : ' · toque para baixar'}</div></a>` : ''}
+   ${!copel && pdeResumo().tot ? `<a class="fcard" href="#pdes" style="display:block;margin-top:10px;text-decoration:none;color:inherit;${pdeResumo().dev ? 'background:#fee2e2;border:1px solid #fecaca' : ''}"><b>📋 PDE / PLV${pdeResumo().dev ? ` · ${pdeResumo().dev} devolvido(s) para corrigir` : ''}</b><div class="small muted">${pdeResumo().sol} aguardando o fiscal · toque para ver seus pedidos</div></a>` : ''}
    ${!copel && !assTotal() ? `<a class="fcard" href="#assinatura" style="display:block;margin-top:10px;text-decoration:none;color:inherit;background:#eff6ff;border:1px solid #bfdbfe"><b>✍️ Cadastre a assinatura da empresa</b><div class="small muted">O responsável (dono ou supervisor) desenha a assinatura e cria um PIN uma vez; depois assina BMD e FF com um toque.</div></a>` : ''}
    <div id="inst"></div></div>
    <div class="flist">${L.length ? L.map(o => {
@@ -1146,11 +1151,13 @@ function vFobra(app) {
   if (!o) { app.innerHTML = `<div class="fcard empty" style="margin:16px">Obra não encontrada. <a href="#campo">Voltar</a></div>`; return }
   if (!S.nome) { pedirNome(() => render()); return }
   app.innerHTML = `<div class="fobra"><div class="fbar"><a href="#campo" class="btn sm ghost" style="text-decoration:none">←</a><div style="flex:1;min-width:0"><b>${esc(o.projeto)}</b><div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(o.descricao || '')} · ${esc(o.empreiteira || '')}</div></div>${o.pdf ? `<a class="btn sm ghost" href="${esc(driveVer(o.pdf.id))}" target="_blank" rel="noopener" style="text-decoration:none">PDF</a>` : ''}</div>
-   <div id="vw"></div><div class="fbot"><div style="flex:1" id="fsum"></div><button class="btn sm dk" id="novo">+ Poste não previsto</button></div></div>`;
+   <div id="vw"></div><div class="fbot"><div style="flex:1" id="fsum"></div>${souCopel() ? '' : '<button class="btn sm ghost" id="pdebt">PDE/PLV</button>'}<button class="btn sm dk" id="novo">+ Poste não previsto</button></div></div>`;
   FOLHA = 0;
   VIEWER = montarPlanta(o, { onMarker: k => abrirPoste(o, k), onPlace: p => { VIEWER.setPlacing(false); abrirPoste(o, null, p) } });
   $('#novo').onclick = () => { VIEWER.setPlacing(!VIEWER.placing, 'Toque na planta onde ficou o poste novo') };
+  $('#pdebt') && ($('#pdebt').onclick = () => iniciarPde(o));
   updFbot();
+  if (PDE_CORRIGIR && PDE_CORRIGIR.obra === o.id) { const b = PDE_CORRIGIR; PDE_CORRIGIR = null; iniciarPde(o, b); return }
   const rasc = lsGet('fisc.rascunho', null);
   if (rasc && rasc.obra === o.id && Date.now() - rasc.t < 20 * 60000) setTimeout(() => { if (rasc.folha != null) FOLHA = rasc.folha; abrirPoste(o, rasc.key, rasc.novoPos, rasc) }, 300);
 }
@@ -1864,4 +1871,145 @@ async function alertaArmazenamento(app) {
   d.style.cssText = 'display:block;margin-bottom:12px;background:#fee2e2;border-color:#fecaca;color:#991b1b;text-decoration:none';
   d.innerHTML = `⚠️ Armazenamento alto: ${altos.map(a => `${esc(a.div)} em ${fmt1(usoArm(a).max * 100)}%`).join(' · ')}. Toque para ver os detalhes.`;
   app.prepend(d);
+}
+
+/* ================= PDE / PLV: pedido da empreiteira → análise do fiscal ================= */
+const TIPOS_PDE = ['PDE', 'PLV', 'DEC Voluntário'];
+const PDE_ST = { solicitado: ['alt', 'aguardando fiscal'], aprovado: ['ok', 'aprovado'], devolvido: ['bad', 'devolvido'], cancelado: ['', 'cancelado'] };
+const pdeChip = d => `<span class="chip ${PDE_ST[d.status] ? PDE_ST[d.status][0] : ''}">${PDE_ST[d.status] ? PDE_ST[d.status][1] : esc(d.status)}</span>`;
+const pdeResumo = () => S.sess.reduce((a, s) => { const r = (S.raw[s.pref] || {}).pde || {}; a.sol += r.solicitados || 0; a.dev += r.devolvidos || 0; a.tot += r.total || 0; return a }, { sol: 0, dev: 0, tot: 0 });
+const fiscaisDe = pref => (S.raw[pref] || {}).fiscais || [];
+const HORAS = Array.from({ length: 96 }, (_, i) => `${String(Math.floor(i / 4)).padStart(2, '0')}:${String(i % 4 * 15).padStart(2, '0')}`);
+const amanha = () => { const d = new Date(Date.now() + 864e5); return d.toISOString().slice(0, 10) };
+async function listarPdes(filtro) {
+  const L = []; let erro = '';
+  for (const s of S.sess) { try { ((await api(s, 'pdes', filtro || {})).pdes || []).forEach(d => L.push(Object.assign(d, { pref: s.pref }))) } catch (e) { erro = e.rede ? 'Sem conexão.' : e.message } }
+  return { L, erro };
+}
+function folhasTx(o, keys) {
+  const fs = [...new Set(keys.map(k => folhaDe(o, k) + 1))].sort((a, b) => a - b);
+  if (!fs.length) return '';
+  return fs.length > 1 && fs[fs.length - 1] - fs[0] === fs.length - 1 ? `${fs[0]}-${fs[fs.length - 1]}` : fs.join(', ');
+}
+function servicosSugeridos(o, keys) {
+  return keys.map(k => {
+    if (!k.startsWith('P')) return rotuloPoste(o, k);
+    const p = (o.postes || []).find(p => 'P' + p.n === k); if (!p) return '';
+    const E = p.estruturas || []; const ins = E.filter(x => !x.r).map(x => x.t), ret = E.filter(x => x.r).map(x => x.t);
+    const est = [ins.length && 'instalar ' + ins.join(', '), ret.length && 'retirar ' + ret.join(', ')].filter(Boolean).join(' / ');
+    return `Poste ${p.n}${est ? ': ' + est : p.nota ? ': ' + p.nota : p.acao ? ' (' + p.acao + ')' : ''}`;
+  }).filter(Boolean).join('; ');
+}
+/* --- Campo: escolher postes na planta --- */
+function iniciarPde(o, base) {
+  const sel = new Set(base ? base.postes : []);
+  const opts = {
+    decorar: L => L.map(m => sel.has(m.key) ? Object.assign({}, m, { cls: (m.cls || '') + ' pdesel' }) : m),
+    onMarker: k => { sel.has(k) ? sel.delete(k) : sel.add(k); VIEWER.refresh(); barra() }
+  };
+  VIEWER = montarPlanta(o, opts);
+  const bot = $('.fbot');
+  const barra = () => {
+    bot.innerHTML = `<div style="flex:1"><b>${base ? 'Corrigir pedido' : 'Novo PDE/PLV'}</b><div class="small muted">${sel.size ? sel.size + ' poste(s) marcado(s)' : 'Toque nos postes onde a equipe vai trabalhar'}</div></div>
+      <button class="btn sm ghost" id="pdex">Cancelar</button><button class="btn sm pri" id="pdeok" ${sel.size ? '' : 'disabled'}>Continuar</button>`;
+    $('#pdex').onclick = () => render();
+    $('#pdeok').onclick = () => formPde(o, [...sel], base);
+  };
+  barra();
+}
+function formPde(o, keys, base) {
+  const s = sessObra(o); const fis = fiscaisDe(s.pref); const ult = lsGet('fisc.pdeUlt', {});
+  const v = Object.assign({ tipo: 'PDE', fiscal: ult.fiscal || '', data: amanha(), horaIni: '08:00', horaFim: '17:00', pessoas: '', encarregado: ult.encarregado || S.nome || '', telefone: ult.telefone || '', operacional: '', obs: '' }, base || {});
+  const servBase = servicosSugeridos(o, keys);
+  const opt = (L, at) => L.map(x => `<option ${x === at ? 'selected' : ''}>${esc(x)}</option>`).join('');
+  openLayer(`<div class="ov" id="pdeov" style="align-items:flex-end;padding:0"><div class="sheet" style="width:100%;max-height:92vh;overflow:auto"><div class="grab"></div>
+    <div style="display:flex;justify-content:space-between;align-items:center"><h4>${base ? 'Corrigir' : 'Solicitar'} PDE / PLV · ${esc(o.projeto)}</h4><button class="btn sm ghost" id="pfx">Voltar</button></div>
+    ${base && base.motivo ? `<div class="note" style="background:#fee2e2;border-color:#fecaca;color:#991b1b">Devolvido pelo fiscal: ${esc(base.motivo)}</div>` : ''}
+    <div class="small muted" style="margin:4px 0 8px">${esc(o.descricao || '')} · ${esc(o.municipio || '')} · ${keys.length} poste(s): ${esc(keys.map(k => rotuloPoste(o, k).replace(/^Poste /, '')).join(', '))} · folha ${esc(folhasTx(o, keys))}</div>
+    <div class="row2"><div><label class="f">Tipo</label><select class="i" id="ptipo">${opt(TIPOS_PDE, v.tipo)}</select></div>
+      <div><label class="f">Fiscal</label><select class="i" id="pfis"><option value="">Selecione…</option>${opt(fis, v.fiscal)}</select></div></div>
+    <label class="f">Nº operacional / PS / referência elétrica</label><input class="i" id="pop" value="${esc(v.operacional)}">
+    <div class="row2"><div><label class="f">Data dos trabalhos</label><input class="i" id="pdata" type="date" value="${esc(v.data)}"></div><div><label class="f">Pessoas na obra</label><input class="i" id="ppes" type="number" min="1" inputmode="numeric" value="${esc(v.pessoas)}" placeholder="obras + manutenção"></div></div>
+    <div class="row2"><div><label class="f">Início</label><select class="i" id="phi">${opt(HORAS, v.horaIni)}</select></div><div><label class="f">Término</label><select class="i" id="phf">${opt(HORAS, v.horaFim)}</select></div></div>
+    <label class="f">Serviços a serem executados</label><textarea class="i" id="pserv" rows="4" placeholder="Descreva TODO o serviço: pontos de aterramento, serviços com linha viva etc.">${esc(base ? v.servicos : servBase)}</textarea>
+    <div class="small muted">Já veio com os postes e as estruturas do projeto. Complete com aterramentos, linha viva etc.</div>
+    <div class="row2"><div><label class="f">Encarregado</label><input class="i" id="penc" value="${esc(v.encarregado)}"></div><div><label class="f">Telefone do encarregado</label><input class="i" id="ptel" type="tel" inputmode="numeric" value="${esc(v.telefone)}"></div></div>
+    <label class="f">Observações</label><input class="i" id="pobs" value="${esc(v.obs)}">
+    <label style="display:flex;gap:10px;align-items:flex-start;margin-top:14px;font-size:13.5px"><input type="checkbox" id="ptermo" style="width:22px;height:22px;flex:none;margin-top:1px"><span>Declaro que todas as informações preenchidas acima são fiéis ao projeto que me foi entregue.</span></label>
+    <button class="btn pri" id="penv" style="width:100%;margin-top:14px;padding:13px">${base ? 'Reenviar ao fiscal' : 'Enviar ao fiscal'}</button></div></div>`);
+  $('#pfx').onclick = closeLayer;
+  $('#penv').onclick = async e => {
+    const d = { id: base ? base.id : null, obra: o.id, tipo: $('#ptipo').value, fiscal: $('#pfis').value, postes: keys, folhas: folhasTx(o, keys), operacional: $('#pop').value.trim(), data: $('#pdata').value, horaIni: $('#phi').value, horaFim: $('#phf').value,
+      pessoas: $('#ppes').value, servicos: $('#pserv').value.trim(), encarregado: $('#penc').value.trim(), telefone: $('#ptel').value.replace(/\D/g, ''), obs: $('#pobs').value.trim(), nome: S.nome };
+    const falta = [!d.fiscal && 'fiscal', !d.operacional && 'nº operacional', !d.data && 'data', !(+d.pessoas > 0) && 'pessoas', !d.servicos && 'serviços', !d.encarregado && 'encarregado', d.telefone.length < 10 && 'telefone (com DDD)'].filter(Boolean);
+    if (falta.length) return toast('Preencha: ' + falta.join(', '), 1);
+    if (d.horaFim <= d.horaIni) return toast('O término deve ser depois do início', 1);
+    if (d.data < hoje()) return toast('A data não pode ser no passado', 1);
+    if (!$('#ptermo').checked) return toast('Marque o termo de compromisso', 1);
+    const b = e.currentTarget; b.disabled = true; b.textContent = 'Enviando…';
+    try {
+      await api(s, 'solicitarPde', { pde: d });
+      lsSet('fisc.pdeUlt', { fiscal: d.fiscal, encarregado: d.encarregado, telefone: d.telefone });
+      closeLayer(); toast(`${d.tipo} enviado ao fiscal ${d.fiscal}`); await sincronizar(); go('pdes');
+    } catch (err) { toast(err.rede ? 'Sem conexão: o pedido precisa de internet.' : msgServidor(err), 1); b.disabled = false; b.textContent = base ? 'Reenviar ao fiscal' : 'Enviar ao fiscal' }
+  };
+}
+/* --- Campo: meus pedidos --- */
+async function vPdesCampo(app) {
+  app.innerHTML = `<div class="fhead"><div class="who"><div><b>PDE / PLV</b><div class="small muted">Pedidos enviados ao fiscal</div></div><a class="btn sm ghost" href="#campo" style="text-decoration:none">← Obras</a></div></div><div class="flist" id="plst"><div class="fcard empty">Carregando…</div></div>`;
+  const { L, erro } = await listarPdes(); if (S.view !== 'pdes') return;
+  const ord = { devolvido: 0, solicitado: 1, aprovado: 2, cancelado: 3 };
+  L.sort((a, b) => (ord[a.status] - ord[b.status]) || String(b.data).localeCompare(String(a.data)));
+  $('#plst').innerHTML = erro && !L.length ? `<div class="fcard empty">${esc(erro)}</div>` : L.length ? L.map(d => `<div class="fcard"><div class="t"><b>${esc(d.tipo)} · ${esc(d.projeto)}</b>${pdeChip(d)}</div>
+     <div class="s">${dBR(d.data)} · ${esc(d.horaIni)}–${esc(d.horaFim)} · ${d.postes.length} poste(s) · fiscal ${esc(d.fiscal)}${d.numeroPde ? `<br><b>Nº do ${esc(d.tipo)}: ${esc(d.numeroPde)}</b>` : ''}${d.status === 'devolvido' ? `<br><b style="color:var(--bad)">Motivo: ${esc(d.motivo)}</b>` : ''}</div>
+     ${d.status === 'devolvido' || d.status === 'solicitado' ? `<div style="margin-top:8px;display:flex;gap:8px">${d.status === 'devolvido' ? `<button class="btn sm pri" data-cor="${esc(d.id)}">Corrigir e reenviar</button>` : ''}<button class="btn sm ghost" data-can="${esc(d.id)}">Cancelar pedido</button></div>` : ''}</div>`).join('')
+    : `<div class="fcard empty">Nenhum pedido ainda. Abra uma obra e toque em “PDE/PLV”.</div>`;
+  $$('[data-cor]', app).forEach(b => b.onclick = () => { const d = L.find(x => x.id === b.dataset.cor); PDE_CORRIGIR = d; go('campo-' + d.obra) });
+  $$('[data-can]', app).forEach(b => b.onclick = async () => { if (!b.dataset.conf) { b.dataset.conf = 1; b.textContent = 'Confirmar cancelamento'; return } const d = L.find(x => x.id === b.dataset.can); b.disabled = true; try { await api(sessDe(d.pref), 'cancelarPde', { id: d.id }); toast('Pedido cancelado'); await sincronizar(); vPdesCampo(app) } catch (e) { toast(msgServidor(e), 1); b.disabled = false } });
+}
+let PDE_CORRIGIR = null;
+/* --- Gestão: análise do fiscal --- */
+async function vPdes(app) {
+  if (S.mode === 'campo') return vPdesCampo(app);
+  const nomes = S.sess.filter(s => s.papel !== 'empreiteira').map(s => s.responsavel).filter(Boolean);
+  app.innerHTML = `<div class="card"><div class="toolbar"><h2 style="margin:0 12px 0 0">PDE / PLV</h2>
+    <select class="i" id="pst" style="width:auto"><option value="solicitado">Aguardando análise</option><option value="">Todos</option><option value="aprovado">Aprovados</option><option value="devolvido">Devolvidos</option><option value="cancelado">Cancelados</option></select>
+    <label class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="pmeus" ${nomes.length ? 'checked' : 'disabled'}> só os meus${nomes.length ? ` (${esc(nomes[0])})` : ''}</label>
+    <input class="i" id="pq" placeholder="Buscar projeto, empreiteira, data…" style="min-width:220px"></div><div id="ptb"><div class="empty">Carregando…</div></div></div>`;
+  const { L, erro } = await listarPdes(); if (S.view !== 'pdes') return;
+  const draw = () => {
+    const st = $('#pst').value, q = ($('#pq').value || '').toLowerCase(), meus = $('#pmeus').checked;
+    const V = L.filter(d => (!st || d.status === st) && (!meus || nomes.includes(d.fiscal)) && (!q || [d.projeto, d.empreiteira, d.tipo, d.data, d.encarregado, d.operacional].join(' ').toLowerCase().includes(q)))
+      .sort((a, b) => String(a.data + a.horaIni).localeCompare(String(b.data + b.horaIni)));
+    $('#ptb').innerHTML = erro && !L.length ? `<div class="empty">${esc(erro)}</div>` : V.length ? `<div style="overflow:auto"><table><thead><tr><th>Data</th><th>Tipo</th><th>Projeto</th><th>Empreiteira</th><th>Postes</th><th>Fiscal</th><th>Situação</th></tr></thead><tbody>${V.map(d => `<tr class="cl" data-pd="${esc(d.id)}">
+      <td><b>${dBR(d.data)}</b><div class="small muted">${esc(d.horaIni)}–${esc(d.horaFim)}</div></td><td>${esc(d.tipo)}</td><td>${esc(d.projeto)}<div class="small muted">${esc(d.municipio)}</div></td><td>${esc(d.empreiteira)}<div class="small muted">${esc(d.encarregado)}</div></td>
+      <td class="n">${d.postes.length}<div class="small muted">folha ${esc(d.folhas)}</div></td><td>${esc(d.fiscal)}</td><td>${pdeChip(d)}${d.numeroPde ? `<div class="small muted">nº ${esc(d.numeroPde)}</div>` : ''}</td></tr>`).join('')}</tbody></table></div>`
+      : `<div class="empty">Nenhum pedido${st === 'solicitado' ? ' aguardando análise' : ''}${meus ? ' para você' : ''}.</div>`;
+    $$('[data-pd]', app).forEach(r => r.onclick = () => detalhePde(L.find(x => x.id === r.dataset.pd)));
+  };
+  ['pst', 'pmeus'].forEach(id => $('#' + id).onchange = draw); $('#pq').oninput = draw; draw();
+}
+function detalhePde(d) {
+  const o = getObra(d.obra); const kv = (k, v) => v ? `<b>${k}</b><span>${v}</span>` : '';
+  openLayer(`<div class="ov" id="pdov"><div class="box" style="max-width:1100px;width:96vw;padding:0;overflow:hidden"><div style="display:grid;grid-template-columns:minmax(0,1.4fr) minmax(320px,1fr);min-height:70vh">
+    <div style="position:relative;background:#eef1f5">${o ? '<div id="vw" style="height:min(80vh,760px)"></div>' : '<div class="empty">Obra não está mais ativa: planta indisponível.</div>'}</div>
+    <div style="padding:18px;overflow:auto;max-height:86vh"><div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0">${esc(d.tipo)} · ${esc(d.projeto)}</h2><button class="btn sm ghost" id="pdx">Fechar</button></div>
+     <div style="margin:6px 0 10px">${pdeChip(d)}</div>
+     <div class="kv">${kv('Data', `${dBR(d.data)} · ${esc(d.horaIni)} às ${esc(d.horaFim)}`)}${kv('Empreiteira', esc(d.empreiteira))}${kv('Município', esc(d.municipio))}${kv('PEP', esc(d.pep))}
+      ${kv('Postes', `${d.postes.length} · ${esc(o ? d.postes.map(k => rotuloPoste(o, k).replace(/^Poste /, '')).join(', ') : d.postes.join(', '))}`)}${kv('Folha', esc(d.folhas))}${kv('Nº operacional', esc(d.operacional))}
+      ${kv('Pessoas', esc(d.pessoas))}${kv('Encarregado', `${esc(d.encarregado)} · <a href="tel:${esc(d.telefone)}">${esc(d.telefone)}</a>`)}${kv('Fiscal', esc(d.fiscal))}${kv('Solicitado', `${dtBR(d.solicitadoEm)} por ${esc(d.solicitadoPor)}`)}
+      ${kv('Observações', esc(d.obs))}${d.analisadoEm ? kv('Análise', `${dtBR(d.analisadoEm)} · ${esc(d.analisadoPor)}`) : ''}${d.motivo ? kv('Motivo', esc(d.motivo)) : ''}</div>
+     <label class="f">Serviços a serem executados</label><div class="small" style="white-space:pre-wrap;background:#f4f6f9;border-radius:8px;padding:8px">${esc(d.servicos)}</div>
+     ${d.status === 'solicitado' || d.status === 'devolvido' ? `<div style="background:#f4f6f9;border-radius:10px;padding:10px;margin-top:12px">
+       <label class="f" style="margin-top:0">Nº do ${esc(d.tipo)} criado no sistema</label><input class="i" id="pnum" placeholder="opcional, para a empreiteira ver">
+       <button class="btn pri" id="papr" style="width:100%;margin-top:10px">✔️ Aprovar</button>
+       <label class="f">Ou devolver para correção</label><input class="i" id="pmot" placeholder="motivo (ex.: falta ponto de aterramento)">
+       <button class="btn sm" id="pdev" style="margin-top:8px;background:var(--bad);color:#fff">Devolver à empreiteira</button></div>` : ''}
+    </div></div></div></div>`);
+  $('#pdx').onclick = closeLayer; $('#pdov').onclick = e => { if (e.target.id === 'pdov') closeLayer() };
+  if (o) { FOLHA = folhaDe(o, d.postes[0]); const sel = new Set(d.postes); VIEWER = montarPlanta(o, { decorar: L => L.map(m => Object.assign({}, m, { cls: (m.cls || '') + (sel.has(m.key) ? ' pdesel' : ' dim') })), onMarker: () => { } }) }
+  const s = sessDe(d.pref);
+  const acao = async (b, req) => { b.disabled = true; try { await api(s, 'analisarPde', Object.assign({ id: d.id }, req)); closeLayer(); toast(req.decisao === 'aprovar' ? 'Pedido aprovado' : 'Pedido devolvido à empreiteira'); await sincronizar(); vPdes($('#app')) } catch (e) { toast(msgServidor(e), 1); b.disabled = false } };
+  $('#papr') && ($('#papr').onclick = e => acao(e.currentTarget, { decisao: 'aprovar', numeroPde: $('#pnum').value }));
+  $('#pdev') && ($('#pdev').onclick = e => { const m = $('#pmot').value.trim(); if (!m) return toast('Informe o motivo', 1); acao(e.currentTarget, { decisao: 'devolver', motivo: m }) });
 }

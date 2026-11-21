@@ -7,7 +7,7 @@
  * Para atualizar o código depois: Implantar > Gerenciar implantações > ✏️ > Versão: Nova versão > Implantar.
  * NUNCA use "Nova implantação" de novo, porque o endereço muda e o app perde a conexão.
  */
-const VERSAO_SERVIDOR = '1.9';
+const VERSAO_SERVIDOR = '1.10';
 
 const COLS_OBRAS = ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us',
   'empenhoEm', 'prazo', 'status', 'lat', 'lon', 'locOrigem', 'plantaId', 'plantaW', 'plantaH', 'pdfId', 'pdfNome',
@@ -19,6 +19,9 @@ const COLS_DOCS = ['id', 'obra', 'projeto', 'pep', 'empreiteira', 'tipo', 'nome'
 const TIPOS_DOC = ['BMD parcial', 'BMD final', 'BMD', 'FF', 'Vistoria', 'Outro'];
 const COLS_ASS = ['id', 'empresa', 'nome', 'cargo', 'imgId', 'pinHash', 'sal', 'criadoEm', 'criadoPor', 'ativo', 'tentativas', 'ultimoUso', 'aceiteTermo'];
 const TERMO_VERSAO = 'termo-v1';
+const COLS_PDE = ['id', 'obra', 'projeto', 'pep', 'municipio', 'empreiteira', 'tipo', 'fiscal', 'postes', 'folhas', 'operacional', 'data', 'horaIni', 'horaFim',
+  'pessoas', 'servicos', 'encarregado', 'telefone', 'obs', 'status', 'numeroPde', 'motivo', 'solicitadoEm', 'solicitadoPor', 'analisadoEm', 'analisadoPor', 'alteradoEm'];
+const TIPOS_PDE = ['PDE', 'PLV', 'DEC Voluntário'];
 const COLS_AES = ['id', 'aes', 'emitidaEm', 'orgao', 'empreiteiraAes', 'cnpj', 'empreiteira', 'contrato', 'item', 'progOrc', 'pep', 'pepOdd',
   'tipoObra', 'prazo', 'us', 'custo', 'projeto', 'obra', 'pdfId', 'criadoPor', 'criadoEm', 'alteradoEm'];
 const ABAS = {
@@ -30,7 +33,8 @@ const ABAS = {
   registros_historico: COLS_REGS,
   documentos: COLS_DOCS,
   assinantes: COLS_ASS,
-  aes: COLS_AES
+  aes: COLS_AES,
+  pde: COLS_PDE
 };
 const COL_DATA = ['empenhoEm', 'prazo', 'dataExec'];
 const COL_NUM = ['us', 'lat', 'lon', 'plantaW', 'plantaH', 'precisao', 'x', 'y', 'folha', 'custo'];
@@ -186,6 +190,10 @@ function doPost(e) {
       case 'removerDocumento': return json(removerDocumento(p, req));
       case 'assinantes': return json(assinantes(p, req));
       case 'registrarAes': return json(registrarAes(p, req));
+      case 'solicitarPde': return json(solicitarPde(p, req));
+      case 'pdes': return json(pdes(p, req));
+      case 'analisarPde': return json(analisarPde(p, req));
+      case 'cancelarPde': return json(cancelarPde(p, req));
       case 'removerAes': return json(removerAes(p, req));
       case 'cadastrarAssinante': return json(cadastrarAssinante(p, req));
       case 'imgAssinante': return json(imgAssinante(p, req));
@@ -224,6 +232,8 @@ function dados(p, req) {
   };
   if (p.papel !== 'empreiteira') out.empreiteiras = listaEmpreiteiras();
   out.docs = resumoDocs(p);
+  out.pde = resumoPde(p);
+  out.fiscais = listaFiscais();
   if (p.papel === 'gestor') out.aes = ler('aes').filter(function (a) { return !a.obra; });
   return out;
 }
@@ -907,4 +917,91 @@ function armazenamento(p) {
   let usado = null, limite = null;
   try { usado = DriveApp.getStorageUsed(); limite = DriveApp.getStorageLimit(); } catch (e) { }
   return { ok: true, drive: { usado: usado, limite: limite }, planilha: { celulas: celulas, limite: 10000000, abas: abas }, em: agoraIso() };
+}
+
+/* ============================ PDE / PLV (pedido da empreiteira → análise do fiscal) ============================ */
+function listaFiscais() {
+  const vistos = {}; const L = [];
+  ler('chaves').forEach(function (r) {
+    const nome = String(r.responsavel || '').trim();
+    if (normPapel(r.papel) === 'fiscal' && String(r.ativa).toUpperCase() !== 'NÃO' && String(r.ativa).toUpperCase() !== 'NAO' && nome && !vistos[nome]) { vistos[nome] = 1; L.push(nome); }
+  });
+  return L.sort();
+}
+function pdesVisiveis(p) {
+  const L = ler('pde');
+  return p.papel === 'empreiteira' ? L.filter(function (d) { return norm(d.empreiteira) === norm(p.empresa); }) : L;
+}
+function resumoPde(p) {
+  const L = pdesVisiveis(p);
+  return { solicitados: L.filter(function (d) { return d.status === 'solicitado'; }).length, devolvidos: L.filter(function (d) { return d.status === 'devolvido'; }).length, total: L.length };
+}
+function pdePublico(d) {
+  const o = {}; COLS_PDE.forEach(function (k) { o[k] = d[k]; });
+  try { o.postes = d.postes ? JSON.parse(d.postes) : []; } catch (e) { o.postes = []; }
+  return o;
+}
+function pdes(p, req) {
+  let L = pdesVisiveis(p);
+  if (req.obra) L = L.filter(function (d) { return d.obra === req.obra; });
+  L.sort(function (a, b) { return String(b.solicitadoEm).localeCompare(String(a.solicitadoEm)); });
+  return { ok: true, pdes: L.map(pdePublico) };
+}
+function solicitarPde(p, req) {
+  if (p.papel !== 'empreiteira') return { ok: false, erro: 'o pedido de PDE/PLV é feito pela empreiteira' };
+  const d = req.pde || {};
+  const o = ler('obras').filter(function (x) { return x.id === d.obra; })[0];
+  if (!o) return { ok: false, erro: 'obra não encontrada ou já encerrada' };
+  if (norm(o.empreiteira) !== norm(p.empresa)) return { ok: false, erro: 'esta obra não é da sua empresa' };
+  const falta = [];
+  if (TIPOS_PDE.indexOf(d.tipo) < 0) falta.push('tipo');
+  if (!d.postes || !d.postes.length) falta.push('postes');
+  ['fiscal', 'operacional', 'data', 'horaIni', 'horaFim', 'servicos', 'encarregado', 'telefone'].forEach(function (k) { if (!String(d[k] || '').trim()) falta.push(k); });
+  if (!(Number(d.pessoas) > 0)) falta.push('pessoas');
+  if (falta.length) return { ok: false, erro: 'preencha: ' + falta.join(', ') };
+  if (String(d.horaFim) <= String(d.horaIni)) return { ok: false, erro: 'a hora de término deve ser depois do início' };
+  const agora = agoraIso();
+  const campos = {
+    obra: o.id, projeto: o.projeto, pep: o.pep || '', municipio: o.municipio || '', empreiteira: o.empreiteira, tipo: d.tipo, fiscal: d.fiscal,
+    postes: JSON.stringify(d.postes), folhas: d.folhas || '', operacional: d.operacional, data: d.data, horaIni: d.horaIni, horaFim: d.horaFim,
+    pessoas: String(Number(d.pessoas)), servicos: d.servicos, encarregado: d.encarregado, telefone: String(d.telefone).replace(/\D/g, ''), obs: d.obs || '',
+    status: 'solicitado', motivo: '', solicitadoEm: agora, solicitadoPor: d.nome || p.responsavel || p.empresa, alteradoEm: agora
+  };
+  let id = d.id, ok = false;
+  comTrava(function () {
+    const atual = id ? ler('pde').filter(function (x) { return x.id === id; })[0] : null;
+    if (atual) {   // correção de um pedido devolvido
+      if (atual.status === 'aprovado') return;
+      ok = atualizarLinha('pde', id, campos);
+    } else {
+      id = 'PDE' + Date.now().toString(36) + Math.floor(Math.random() * 1e3).toString(36);
+      campos.id = id; campos.numeroPde = ''; campos.analisadoEm = ''; campos.analisadoPor = '';
+      anexar('pde', campos); ok = true;
+    }
+    if (ok) marcarAlteracao();
+  });
+  return ok ? { ok: true, id: id } : { ok: false, erro: 'pedido já aprovado não pode ser alterado' };
+}
+function analisarPde(p, req) {
+  if (p.papel === 'empreiteira') return { ok: false, erro: 'quem analisa o pedido é o fiscal' };
+  const d = ler('pde').filter(function (x) { return x.id === req.id; })[0];
+  if (!d) return { ok: false, erro: 'pedido não encontrado' };
+  if (d.status === 'cancelado') return { ok: false, erro: 'pedido cancelado pela empreiteira' };
+  const agora = agoraIso(); let campos;
+  if (req.decisao === 'aprovar') campos = { status: 'aprovado', numeroPde: String(req.numeroPde || '').trim(), motivo: '', analisadoEm: agora, analisadoPor: p.responsavel || p.papel, alteradoEm: agora };
+  else if (req.decisao === 'devolver') {
+    if (!String(req.motivo || '').trim()) return { ok: false, erro: 'informe o motivo da devolução' };
+    campos = { status: 'devolvido', motivo: String(req.motivo).trim(), analisadoEm: agora, analisadoPor: p.responsavel || p.papel, alteradoEm: agora };
+  } else return { ok: false, erro: 'ação inválida' };
+  let ok = false;
+  comTrava(function () { ok = atualizarLinha('pde', d.id, campos); marcarAlteracao(); });
+  return { ok: ok };
+}
+function cancelarPde(p, req) {
+  const d = pdesVisiveis(p).filter(function (x) { return x.id === req.id; })[0];
+  if (!d) return { ok: false, erro: 'pedido não encontrado' };
+  if (d.status === 'aprovado' && p.papel === 'empreiteira') return { ok: false, erro: 'pedido já aprovado: fale com o fiscal' };
+  let ok = false;
+  comTrava(function () { ok = atualizarLinha('pde', d.id, { status: 'cancelado', alteradoEm: agoraIso() }); marcarAlteracao(); });
+  return { ok: ok };
 }
