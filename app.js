@@ -1128,7 +1128,6 @@ function vFlist(app) {
    ${S.fila.length ? `<div class="note" style="margin-top:10px">${S.fila.length} registro(s) aguardando sinal para enviar. <button class="btn sm" id="envf">Tentar agora</button></div>` : ''}
    ${!copel && docsTotal() ? `<a class="fcard" href="#assinar" style="display:block;margin-top:10px;text-decoration:none;color:inherit;${docsPend() ? 'background:#fff7ed;border:1px solid #fed7aa' : ''}"><b>📄 ${docsPend() ? docsPend() + ' documento(s) aguardando sua assinatura' : 'Documentos assinados'}</b><div class="small muted">BMD, FF e vistoria enviados pela Copel${docsPend() ? ' · toque para assinar' : ' · toque para baixar'}</div></a>` : ''}
    ${!copel && !assTotal() ? `<a class="fcard" href="#assinatura" style="display:block;margin-top:10px;text-decoration:none;color:inherit;background:#eff6ff;border:1px solid #bfdbfe"><b>✍️ Cadastre a assinatura da empresa</b><div class="small muted">O responsável (dono ou supervisor) desenha a assinatura e cria um PIN uma vez; depois assina BMD e FF com um toque.</div></a>` : ''}
-   <a href="#fluxo" class="small" style="display:block;margin-top:10px;text-align:center">📘 Como funciona o fluxo do app</a>
    <div id="inst"></div></div>
    <div class="flist">${L.length ? L.map(o => {
     const I = S.idx[o.id]; const d = diasAte(o.prazo); return `<div class="fcard" data-o="${esc(o.id)}"><div class="t"><b>${esc(o.projeto)}</b><span class="pct" style="color:var(--or)">${fmt1(I.pct * 100)}%</span></div>
