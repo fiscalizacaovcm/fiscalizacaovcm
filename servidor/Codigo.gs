@@ -7,7 +7,7 @@
  * Para atualizar o código depois: Implantar > Gerenciar implantações > ✏️ > Versão: Nova versão > Implantar.
  * NUNCA use "Nova implantação" de novo, porque o endereço muda e o app perde a conexão.
  */
-const VERSAO_SERVIDOR = '1.3';
+const VERSAO_SERVIDOR = '1.3.1';
 
 const COLS_OBRAS = ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us',
   'empenhoEm', 'prazo', 'status', 'lat', 'lon', 'locOrigem', 'plantaId', 'plantaW', 'plantaH', 'pdfId', 'pdfNome',
@@ -25,6 +25,13 @@ const ABAS = {
 const COL_DATA = ['empenhoEm', 'prazo', 'dataExec'];
 const COL_NUM = ['us', 'lat', 'lon', 'plantaW', 'plantaH', 'precisao', 'x', 'y'];
 const PAPEIS = ['gestor', 'fiscal', 'empreiteira'];
+/** Papel tolerante a digitação: "Empreiteria", "empreiteira " etc. viram "empreiteira". */
+function normPapel(v) {
+  const t = String(v || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  if (t.indexOf('gest') === 0) return 'gestor';
+  if (t.indexOf('fisc') === 0) return 'fiscal';
+  return 'empreiteira';
+}
 const EDITAVEIS_OBRA = ['ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us', 'empenhoEm',
   'prazo', 'lat', 'lon', 'locOrigem', 'postes', 'pep'];
 const TIPOS_EXEC = ['conforme', 'alterado', 'nao', 'novo'];
@@ -98,6 +105,8 @@ function garantirEstrutura() {
       sh.setFrozenRows(1);
     }
     sh.getRange(1, 1, sh.getMaxRows(), cab.length).setNumberFormat('@');
+    if (nome === 'chaves') sh.getRange(2, 2, sh.getMaxRows() - 1, 1).setDataValidation(
+      SpreadsheetApp.newDataValidation().requireValueInList(PAPEIS, true).setAllowInvalid(true).build());
   });
   PropertiesService.getScriptProperties().setProperty('estrutura', VERSAO_SERVIDOR);
 }
@@ -211,7 +220,7 @@ function listaEmpreiteiras() {
   const vistos = {};
   sh.getRange(2, 1, sh.getLastRow() - 1, 5).getValues().forEach(function (r) {
     const ativa = String(r[4]).toUpperCase();
-    if (String(r[1]).toLowerCase() === 'empreiteira' && r[2] && ativa !== 'NÃO' && ativa !== 'NAO') vistos[String(r[2]).trim()] = 1;
+    if (normPapel(r[1]) === 'empreiteira' && r[2] && ativa !== 'NÃO' && ativa !== 'NAO') vistos[String(r[2]).trim()] = 1;
   });
   return Object.keys(vistos).sort(function (x, y) { return x.localeCompare(y, 'pt-BR'); });
 }
@@ -541,7 +550,7 @@ function perfil(chave) {
   if (!f) return null;
   const r = sh.getRange(f.getRow(), 1, 1, 5).getValues()[0];
   if (String(r[4]).toUpperCase() === 'NÃO' || String(r[4]).toUpperCase() === 'NAO') return null;
-  const papel = PAPEIS.indexOf(String(r[1]).toLowerCase()) >= 0 ? String(r[1]).toLowerCase() : 'empreiteira';
+  const papel = normPapel(r[1]);
   return { chave: r[0], papel: papel, empresa: String(r[2] || ''), responsavel: String(r[3] || ''), linha: f.getRow() };
 }
 
