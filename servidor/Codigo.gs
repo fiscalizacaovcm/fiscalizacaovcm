@@ -7,7 +7,7 @@
  * Para atualizar o código depois: Implantar > Gerenciar implantações > ✏️ > Versão: Nova versão > Implantar.
  * NUNCA use "Nova implantação" de novo, porque o endereço muda e o app perde a conexão.
  */
-const VERSAO_SERVIDOR = '1.7';
+const VERSAO_SERVIDOR = '1.8';
 
 const COLS_OBRAS = ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us',
   'empenhoEm', 'prazo', 'status', 'lat', 'lon', 'locOrigem', 'plantaId', 'plantaW', 'plantaH', 'pdfId', 'pdfNome',
@@ -15,8 +15,8 @@ const COLS_OBRAS = ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'mu
 const COLS_REGS = ['id', 'obra', 'poste', 'tipo', 'alt', 'obs', 'fotoId', 'lat', 'lon', 'gpsOrigem', 'precisao', 'dataExec',
   'marcadoEm', 'recebidoEm', 'nome', 'empresa', 'x', 'y', 'invalido', 'invalidadoPor', 'alteradoEm', 'folha'];
 const COLS_DOCS = ['id', 'obra', 'projeto', 'pep', 'empreiteira', 'tipo', 'nome', 'pdfId', 'hash', 'enviadoPor', 'enviadoEm', 'status',
-  'assinadoPor', 'assinadoEm', 'assinaturaChave', 'dispositivo', 'pdfAssinadoId', 'hashAssinado', 'alteradoEm'];
-const TIPOS_DOC = ['BMD', 'FF', 'Vistoria', 'Outro'];
+  'assinadoPor', 'assinadoEm', 'assinaturaChave', 'dispositivo', 'pdfAssinadoId', 'hashAssinado', 'alteradoEm', 'parcial', 'medicao'];
+const TIPOS_DOC = ['BMD parcial', 'BMD final', 'BMD', 'FF', 'Vistoria', 'Outro'];
 const COLS_ASS = ['id', 'empresa', 'nome', 'cargo', 'imgId', 'pinHash', 'sal', 'criadoEm', 'criadoPor', 'ativo', 'tentativas', 'ultimoUso', 'aceiteTermo'];
 const TERMO_VERSAO = 'termo-v1';
 const COLS_AES = ['id', 'aes', 'emitidaEm', 'orgao', 'empreiteiraAes', 'cnpj', 'empreiteira', 'contrato', 'item', 'progOrc', 'pep', 'pepOdd',
@@ -474,16 +474,16 @@ function registrar(p, req) {
     x: r.x != null ? r.x : '', y: r.y != null ? r.y : '', invalido: '', invalidadoPor: '', alteradoEm: agora,
     folha: r.folha != null ? r.folha : ''
   };
-  let encerrada = false;
+  let fiscalizada = false;
   comTrava(function () {
     if (!buscarLinha('registros', r.id)) { anexar('registros', linha); marcarAlteracao(); }
-    // última aprovação do fiscal: a obra vai sozinha para encerramento final
+    // última aprovação: a obra fica "aguardando FF" (o encerramento é quando o fiscal envia a FF)
     if (r.tipo === 'aprovado') {
       const regsObra = ler('registros').filter(function (x) { return x.obra === r.obra; });
-      if (obraFiscalizada(obra, regsObra)) encerrada = encerrarObra(r.obra, 'fiscalização concluída · ' + (r.nome || p.responsavel || p.papel));
+      fiscalizada = obraFiscalizada(obra, regsObra);
     }
   });
-  return { ok: true, id: r.id, fotoId: fotoId, encerrada: encerrada };
+  return { ok: true, id: r.id, fotoId: fotoId, fiscalizada: fiscalizada };
 }
 
 /** Fiscal aprova/reprova vários postes de uma vez (botão "Aprovar todos os executados"). */
@@ -495,7 +495,7 @@ function fiscalizarLote(p, req) {
   const obra = ler('obras').filter(function (o) { return o.id === idObra; })[0];
   if (!obra) return { ok: false, erro: 'obra não encontrada ou já concluída' };
   const agora = agoraIso();
-  let encerrada = false, gravados = 0;
+  let fiscalizada = false, gravados = 0;
   comTrava(function () {
     L.forEach(function (r) {
       if (r.obra !== idObra || buscarLinha('registros', r.id)) return;
@@ -508,9 +508,9 @@ function fiscalizarLote(p, req) {
     });
     if (gravados) marcarAlteracao();
     const regsObra = ler('registros').filter(function (x) { return x.obra === idObra; });
-    if (obraFiscalizada(obra, regsObra)) encerrada = encerrarObra(idObra, 'fiscalização concluída · ' + (L[0].nome || p.responsavel || p.papel));
+    fiscalizada = obraFiscalizada(obra, regsObra);
   });
-  return { ok: true, gravados: gravados, encerrada: encerrada };
+  return { ok: true, gravados: gravados, fiscalizada: fiscalizada };
 }
 
 function invalidar(p, req) {
@@ -699,6 +699,7 @@ function docPublico(d) {
   const o = {};
   COLS_DOCS.forEach(function (k) { if (k !== 'assinaturaChave') o[k] = d[k]; });
   o.chaveFinal = d.assinaturaChave ? String(d.assinaturaChave).slice(-4) : '';
+  try { o.medicao = d.medicao ? JSON.parse(d.medicao) : null; } catch (e) { o.medicao = null; }
   return o;
 }
 function documentos(p, req) {
@@ -723,10 +724,20 @@ function enviarDocumento(p, req) {
   const agora = agoraIso();
   const linha = {
     id: id, obra: o.id, projeto: o.projeto, pep: o.pep || '', empreiteira: o.empreiteira, tipo: tipo, nome: nome, pdfId: arq.getId(),
-    hash: sha256(bytes), enviadoPor: p.responsavel || p.papel, enviadoEm: agora, status: 'aguardando', alteradoEm: agora
+    hash: sha256(bytes), enviadoPor: p.responsavel || p.papel, enviadoEm: agora, status: 'aguardando', alteradoEm: agora, parcial: '', medicao: ''
   };
-  comTrava(function () { anexar('documentos', linha); marcarAlteracao(); });
-  return { ok: true, documento: docPublico(linha) };
+  let encerrada = false;
+  comTrava(function () {
+    if (tipo === 'BMD parcial') {
+      linha.parcial = String(ler('documentos').filter(function (d) { return d.obra === o.id && d.tipo === 'BMD parcial'; }).length + 1);
+      linha.medicao = req.medicao ? JSON.stringify(req.medicao) : '';
+    }
+    anexar('documentos', linha);
+    // FF emitida: a obra é encerrada e vai para o histórico
+    if (tipo === 'FF' && buscarLinha('obras', o.id)) encerrada = encerrarObra(o.id, 'FF enviada · ' + (p.responsavel || p.papel));
+    marcarAlteracao();
+  });
+  return { ok: true, documento: docPublico(linha), encerrada: encerrada };
 }
 function docPdf(p, req) {
   const d = docsVisiveis(p).filter(function (x) { return x.id === req.id; })[0];

@@ -1,7 +1,7 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.9.0';
+const VERSAO_APP = '1.10.0';
 const LIB = {
   pdf: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   pdfw: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
@@ -226,7 +226,7 @@ function fechar(o, I) {
   for (const p of (o.postes || [])) { const f = fiscPoste(I, 'P' + p.n); if (f === 'aprovado') fis++; else if (f === 'reprovado') rep++ }
   for (const n of I.novos) { const f = fiscPoste(I, n.key); if (f === 'reprovado') rep++ }
   I.fis = fis; I.rep = rep; I.pctFis = tot ? fis / tot : 0; I.usMed = (o.us || 0) * I.pctFis;
-  I.etapa = I.exec === 0 ? 'empenhada' : I.exec < tot ? 'execucao' : 'executada';
+  I.etapa = I.exec === 0 ? 'empenhada' : I.exec < tot ? 'execucao' : (tot && fis >= tot ? 'medida' : 'executada');
   I.pend = I.regs.filter(r => r.pendente).length;
   const gps = I.regs.filter(r => r.gps && !r.invalido && r.gps.lat != null);
   I.gps = gps.length ? { lat: gps.reduce((s, r) => s + Number(r.gps.lat), 0) / gps.length, lon: gps.reduce((s, r) => s + Number(r.gps.lon), 0) / gps.length } : null;
@@ -246,8 +246,8 @@ function fiscPoste(I, key) {
   const st = I && I.postes.get(key); if (!st || !st.fisc || !st.last || !EXEC.has(st.last.tipo)) return '';
   return (st.fisc.em || '') >= (st.last.em || '') ? st.fisc.tipo : '';
 }
-const ETAPA_TX = { empenhada: 'Empenhada', execucao: 'Em execução', executada: 'Executada · aguardando fiscalização' };
-const ETAPA_CH = { empenhada: '', execucao: 'or', executada: 'alt' };
+const ETAPA_TX = { empenhada: 'Empenhada', execucao: 'Em execução', executada: 'Executada · aguardando fiscalização', medida: 'Medida · aguardando FF' };
+const ETAPA_CH = { empenhada: '', execucao: 'or', executada: 'alt', medida: 'ok' };
 const etapaChip = I => `<span class="chip ${ETAPA_CH[I.etapa]}">${ETAPA_TX[I.etapa]}</span>`;
 function statusPoste(o, key) {
   const I = S.idx[o.id]; const st = I && I.postes.get(key); if (!st || !st.last) return '';
@@ -378,7 +378,7 @@ function ligarFiltroDiv() { $('#fdiv') && ($('#fdiv').onchange = e => { S.divFil
 function vPainel(app) {
   const base = obrasVisiveis();
   const ativas = base.filter(o => o.status !== 'concluida' && o.status !== 'cancelada');
-  let us = 0, usE = 0, usM = 0, pt = 0, pe = 0, pf = 0, hojeN = 0, alt = 0, bad = 0, rep = 0; const h = hoje(); const et = { empenhada: 0, execucao: 0, executada: 0 }; const usEt = { empenhada: 0, execucao: 0, executada: 0 };
+  let us = 0, usE = 0, usM = 0, pt = 0, pe = 0, pf = 0, hojeN = 0, alt = 0, bad = 0, rep = 0; const h = hoje(); const et = { empenhada: 0, execucao: 0, executada: 0, medida: 0 }; const usEt = { empenhada: 0, execucao: 0, executada: 0, medida: 0 };
   for (const o of ativas) { const I = S.idx[o.id]; us += o.us || 0; usE += I.usExec; usM += I.usMed; pt += I.tot; pe += I.exec; pf += I.fis; alt += I.alt; bad += I.bad; rep += I.rep; et[I.etapa]++; usEt[I.etapa] += o.us || 0 }
   const ids = new Set(base.map(o => o.id));
   for (const r of todosRegs()) if (!r.invalido && r.dataExec === h && ids.has(r.obra)) hojeN++;
@@ -391,7 +391,7 @@ function vPainel(app) {
     <div class="kpi"><b>${fmt(usM)}</b><span>US medidas (fiscalizadas)</span><small>${us ? fmt1(usM / us * 100) + '%' : '—'} · ${fmt(pf)} postes aprovados${rep ? ` · ${rep} reprovados` : ''}</small></div>
     <div class="kpi"><b>${hojeN}</b><span>registros hoje</span><small>${dBR(h)}</small></div>
   </div>
-  <div class="card etapas" style="margin-top:14px">${[['empenhada', 'Empenhadas', 'sem registro em campo'], ['execucao', 'Em execução', 'empreiteira registrando'], ['executada', 'Executadas em campo', 'aguardando fiscalização']].map(([k, t, sub]) => `<div><b>${et[k]}</b><span>${t}</span><small>${fmt(usEt[k])} US · ${sub}</small></div>`).join('<i>›</i>')}<i>›</i><a href="#historico"><b>${qtdHistorico()}</b><span>Encerramento final</span><small>fiscalizadas · no histórico</small></a></div>
+  <div class="card etapas" style="margin-top:14px">${[['empenhada', 'Empenhadas', 'sem registro em campo'], ['execucao', 'Em execução', 'empreiteira registrando'], ['executada', 'Executadas em campo', 'aguardando fiscalização'], ['medida', 'Medidas', 'todos os postes aprovados · aguardando FF']].map(([k, t, sub]) => `<div><b>${et[k]}</b><span>${t}</span><small>${fmt(usEt[k])} US · ${sub}</small></div>`).join('<i>›</i>')}<i>›</i><a href="#historico"><b>${qtdHistorico()}</b><span>Encerradas</span><small>FF emitida · no histórico</small></a></div>
   <div class="grid two" style="margin-top:14px">
     <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><h2 style="margin:0">Onde estão as obras</h2>
       <div class="legend"><span style="--c:var(--pend)">sem início</span><span style="--c:var(--or)">em execução</span><span style="--c:var(--ok)">executada em campo</span></div></div>
@@ -417,6 +417,7 @@ function vPainel(app) {
     if (!I.ultimo) at.push([4, o, `<span class="chip">ainda sem registro em campo</span>`]);
     if (I.rep) at.push([2, o, `<span class="chip bad">${I.rep} poste(s) reprovado(s) pelo fiscal</span>`]);
     if (I.etapa === 'executada') at.push([1, o, `<span class="chip alt">executada · falta fiscalizar ${I.tot - I.fis} poste(s)</span>`]);
+    if (I.etapa === 'medida') at.push([1, o, `<span class="chip ok">todos os postes aprovados · emitir a FF</span>`]);
   }
   at.sort((a, b) => a[0] - b[0]);
   $('#aten').innerHTML = at.length ? `<table>${at.slice(0, 8).map(([, o, c]) => `<tr class="cl" data-o="${esc(o.id)}"><td><b>${esc(o.projeto)}</b><div class="small muted">${esc(o.empreiteira || '—')}${S.sess.length > 1 ? ' · ' + esc((sessObra(o) || {}).div || '') : ''}</div></td><td class="n">${c}</td></tr>`).join('')}</table>` : `<div class="muted small">Nada pendente.</div>`;
@@ -656,7 +657,7 @@ function renderObraSide() {
   });
   $$('[data-pk]', side).forEach(el => el.onclick = () => { SEL = el.dataset.pk; irParaPoste(o, SEL, OPTS_OBRA); renderObraSide() });
   ligarFiscalWeb(o, side);
-  if (hist) { const c = document.createElement('div'); c.className = 'card'; c.id = 'docsobra'; side.insertBefore(c, side.children[1] || null); cardDocsObra(o) }
+  { const c = document.createElement('div'); c.className = 'card'; c.id = 'docsobra'; side.insertBefore(c, side.children[1] || null); cardDocsObra(o) }
   $('#addf') && ($('#addf').onclick = () => escolherPdf(f => processarPdf(f, o)));
 }
 function regHtml(o, r) {
@@ -1085,7 +1086,7 @@ async function enviarFisc(o, keys, tipo, alt, obs) {
   const s = sessObra(o); const agora = new Date().toISOString();
   const regs = keys.map(k => ({ id: uid(), obra: o.id, poste: k, tipo, alt: alt || [], obs: obs || '', dataExec: hoje(), marcadoEm: agora, nome: S.nome || s.responsavel || '', empresa: 'Copel (fiscalização)' }));
   const j = keys.length === 1 ? await api(s, 'registrar', { registro: regs[0], foto: null }) : await api(s, 'fiscalizarLote', { registros: regs });
-  if (j.encerrada) { toast('Fiscalização concluída: obra encerrada e movida para o Histórico'); await sincronizar(); go('historico'); return }
+  if (j.fiscalizada) { toast('Todos os postes aprovados: a obra está medida e aguardando a FF'); await sincronizar(); return }
   toast(tipo === 'reprovado' ? 'Poste reprovado' : keys.length > 1 ? keys.length + ' postes aprovados' : 'Poste aprovado');
   await sincronizar();
 }
@@ -1270,7 +1271,7 @@ function abrirPoste(o, key, novoPos, rasc) {
       const j = await api(s, 'registrar', { registro: reg, foto: fotoB64 ? { b64: fotoB64 } : null });
       await IDB.del('fila:' + reg.id).catch(() => { });
       S.fila = S.fila.filter(x => x.registro.id !== reg.id);
-      if (j.encerrada) { toast('Último poste aprovado: obra fiscalizada e encerrada (foi para o Histórico)'); await sincronizar(); go(S.mode === 'campo' ? 'campo' : 'historico') }
+      if (j.fiscalizada) { toast('Último poste aprovado: obra medida, aguardando a FF'); await sincronizar() }
       else { toast(F.tipo === 'aprovado' ? 'Poste aprovado' : F.tipo === 'reprovado' ? 'Poste reprovado' : 'Registro salvo'); sincronizar() }
     } catch (e) {
       if (e.rede) { toast('Sem sinal: registro guardado no celular e será enviado sozinho.'); setSt('sem conexão', true) }
@@ -1480,7 +1481,9 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.se
 })();
 
 /* ================= documentos para assinatura (BMD, FF, vistoria) ================= */
-const TIPOS_DOC = ['BMD', 'FF', 'Vistoria', 'Outro'];
+const TIPOS_DOC = ['BMD parcial', 'BMD final', 'FF', 'Vistoria', 'Outro'];
+const nomeDoc = d => d.tipo + (d.parcial ? ' nº ' + d.parcial : '');
+const medTx = d => d.medicao ? ` · ${d.medicao.qtd} poste(s) · ${fmtUs(d.medicao.us)} US${d.medicao.novos != null ? ` (+${d.medicao.novos} desde a anterior)` : ''}` : '';
 const docsPend = () => S.sess.reduce((n, s) => n + (((S.raw[s.pref] || {}).docs || {}).pendentes || 0), 0);
 const docsTotal = () => S.sess.reduce((n, s) => n + (((S.raw[s.pref] || {}).docs || {}).total || 0), 0);
 async function pdfLibA() { if (window.PDFLib) return window.PDFLib; await loadScript(LIB.pdflib); return window.PDFLib }
@@ -1508,7 +1511,7 @@ function ligarDocBtns(root, L) {
   $$('[data-drm]', root).forEach(b => b.onclick = async e => {
     e.stopPropagation(); if (!b.dataset.conf) { b.dataset.conf = 1; b.textContent = 'Confirmar remoção'; return }
     const d = L.find(x => x.id === b.dataset.drm); b.disabled = true;
-    try { await api(sessDe(d.pref), 'removerDocumento', { id: d.id }); toast('Documento removido'); sincronizar(); render() } catch (err) { toast(msgServidor(err), 1); b.disabled = false }
+    try { await api(sessDe(d.pref), 'removerDocumento', { id: d.id }); delete DOCS_CACHE[d.obra]; toast('Documento removido'); sincronizar(); render() } catch (err) { toast(msgServidor(err), 1); b.disabled = false }
   });
 }
 /* Copel: todos os documentos */
@@ -1523,7 +1526,7 @@ async function vDocs(app) {
     const q = ($('#dq').value || '').toLowerCase(), st = $('#dst').value;
     const V = L.filter(d => (!st || (st === 'assinado') === (d.status === 'assinado')) && (!q || [d.projeto, d.pep, d.empreiteira, d.tipo, d.nome].join(' ').toLowerCase().includes(q)));
     $('#dtb').innerHTML = erro && !L.length ? `<div class="empty">${esc(erro)}</div>` : V.length ? `<div style="overflow:auto"><table><thead><tr><th>Documento</th><th>Projeto</th><th>Empreiteira</th><th>Enviado</th><th>Situação</th><th></th></tr></thead><tbody>${V.map(d => `<tr class="cl" data-dv="${esc(d.id)}">
-      <td><b>${esc(d.tipo)}</b><div class="small muted">${esc(d.nome)}</div></td><td>${esc(d.projeto)}${d.pep ? `<div class="small muted">PEP ${esc(d.pep)}</div>` : ''}</td><td>${esc(d.empreiteira)}</td>
+      <td><b>${esc(nomeDoc(d))}</b><div class="small muted">${esc(d.nome)}${esc(medTx(d))}</div></td><td>${esc(d.projeto)}${d.pep ? `<div class="small muted">PEP ${esc(d.pep)}</div>` : ''}</td><td>${esc(d.empreiteira)}</td>
       <td>${dtBR(d.enviadoEm)}<div class="small muted">${esc(d.enviadoPor || '')}</div></td><td>${DOC_ST(d)}${d.assinadoPor ? `<div class="small muted">${esc(d.assinadoPor)}</div>` : ''}</td>
       <td style="white-space:nowrap">${d.status === 'assinado' ? `<button class="btn sm pri" data-dl="${esc(d.id)}" data-v="assinado">Baixar assinado</button>` : `<button class="btn sm ghost" data-drm="${esc(d.id)}">Remover</button>`}</td></tr>`).join('')}</tbody></table></div>`
       : `<div class="empty">Nenhum documento${q || st ? ' com esse filtro' : ' enviado ainda'}.</div>`;
@@ -1538,29 +1541,57 @@ async function vDocs(app) {
   $$('[data-rva]', al).forEach(b => b.onclick = async () => { if (!b.dataset.conf) { b.dataset.conf = 1; b.textContent = 'Confirmar'; return } const a = AS.find(x => x.id === b.dataset.rva); b.disabled = true; try { await api(sessDe(a.pref), 'revogarAssinante', { id: a.id }); toast('Assinatura revogada'); b.closest('tr').remove() } catch (e) { toast(msgServidor(e), 1); b.disabled = false } });
 }
 /* card na tela da obra (Histórico): enviar e acompanhar */
+const DOCS_CACHE = {};
 async function cardDocsObra(o) {
   const el = $('#docsobra'); if (!el) return;
-  const s = sessObra(o); const pode = s && s.papel !== 'empreiteira';
-  el.innerHTML = `<h3>Documentos para assinatura</h3><div id="dlist" class="small muted">Carregando…</div>
-   ${pode ? `<div style="background:#f4f6f9;border-radius:10px;padding:10px;margin-top:10px"><div class="row2"><div><label class="f" style="margin-top:0">Tipo</label><select class="i" id="dtipo">${TIPOS_DOC.map(t => `<option>${t}</option>`).join('')}</select></div>
+  const s = sessObra(o); const pode = s && s.papel !== 'empreiteira'; const hist = S.view === 'hobra';
+  const I = S.idx[o.id];
+  const aprov = I ? [...I.postes.keys()].filter(k => fiscPoste(I, k) === 'aprovado') : [];
+  const tipos = hist ? ['BMD final', 'FF', 'Vistoria', 'Outro', 'BMD parcial'] : (I && I.etapa === 'medida' ? ['FF', 'BMD parcial', 'Vistoria', 'Outro'] : ['BMD parcial', 'FF', 'Vistoria', 'Outro']);
+  el.innerHTML = `<h3>${hist ? 'Documentos' : 'Medições e documentos'}</h3><div id="dresumo" class="small" style="margin-bottom:6px"></div><div id="dlist" class="small muted">Carregando…</div>
+   ${pode ? `<div style="background:#f4f6f9;border-radius:10px;padding:10px;margin-top:10px"><div class="row2"><div><label class="f" style="margin-top:0">Tipo</label><select class="i" id="dtipo">${tipos.map(t => `<option>${t}</option>`).join('')}</select></div>
      <div><label class="f" style="margin-top:0">PDF</label><label class="btn sm ghost" style="display:block;text-align:center;cursor:pointer"><input type="file" accept="application/pdf" id="dfile" class="hidden"><span id="dfn">Escolher PDF</span></label></div></div>
+     <div id="dinfo" class="small muted" style="margin-top:8px"></div>
      <button class="btn sm pri" id="denv" style="width:100%;margin-top:10px" disabled>Enviar para ${esc(o.empreiteira)} assinar</button></div>` : ''}`;
-  let arq = null;
-  if (pode) {
-    $('#dfile').onchange = e => { arq = e.target.files[0] || null; $('#dfn').textContent = arq ? arq.name : 'Escolher PDF'; $('#denv').disabled = !arq };
-    $('#denv').onclick = async e => {
-      const b = e.currentTarget; if (!arq) return; if (arq.size > 20e6) { toast('PDF muito grande (máx. 20 MB)', 1); return }
-      b.disabled = true; b.textContent = 'Enviando…';
-      try { await api(s, 'enviarDocumento', { obra: o.id, tipo: $('#dtipo').value, pdf: { b64: await blobB64(arq), nome: arq.name } }); toast('Documento enviado: a empreiteira já pode assinar'); sincronizar(); cardDocsObra(o) }
-      catch (err) { toast(msgServidor(err), 1); b.disabled = false; b.textContent = 'Enviar para ' + o.empreiteira + ' assinar' }
-    };
-  }
-  const { L, erro } = await listarDocs({ obra: o.id, pref: o.pref });
+  const c = DOCS_CACHE[o.id]; let L, erro;
+  if (c && Date.now() - c.t < 30000) ({ L, erro } = c); else { ({ L, erro } = await listarDocs({ obra: o.id, pref: o.pref })); if (!erro) DOCS_CACHE[o.id] = { t: Date.now(), L, erro } }
   const dl = $('#dlist'); if (!dl || getObra(S.obraId) !== o) return;
-  dl.innerHTML = erro && !L.length ? esc(erro) : L.length ? L.map(d => `<div class="docrow" data-dv="${esc(d.id)}"><div style="flex:1;min-width:0"><b>${esc(d.tipo)}</b> ${DOC_ST(d)}<div class="small muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.nome)}${d.assinadoPor ? ' · ' + esc(d.assinadoPor) : ''}</div></div>
-    ${d.status === 'assinado' ? `<button class="btn sm pri" data-dl="${esc(d.id)}" data-v="assinado">Baixar</button>` : pode ? `<button class="btn sm ghost" data-drm="${esc(d.id)}">Remover</button>` : ''}</div>`).join('') : 'Nenhum documento enviado. Envie o BMD, a FF ou a vistoria em PDF para a empreiteira assinar pelo app.';
+  const parciais = L.filter(d => d.tipo === 'BMD parcial' && d.medicao).sort((a, b) => (+a.parcial || 0) - (+b.parcial || 0));
+  const ult = parciais[parciais.length - 1];
+  const jaMedidos = new Set(ult && ult.medicao ? ult.medicao.postes || [] : []);
+  const novos = aprov.filter(k => !jaMedidos.has(k));
+  const usUlt = ult && ult.medicao ? ult.medicao.us || 0 : 0;
+  if (!hist && I) $('#dresumo').innerHTML = parciais.length || novos.length
+    ? `${parciais.length ? `<b>${parciais.length}</b> BMD parcial(is) emitido(s) · ` : ''}<b>${novos.length}</b> poste(s) aprovado(s) ainda sem BMD${novos.length ? ` (≈ ${fmtUs(Math.max(0, I.usMed - usUlt))} US)` : ''}`
+    : '<span class="muted">Assim que o fiscal aprovar postes, já dá para emitir o BMD parcial.</span>';
+  dl.innerHTML = erro && !L.length ? esc(erro) : L.length ? L.map(d => `<div class="docrow" data-dv="${esc(d.id)}"><div style="flex:1;min-width:0"><b>${esc(nomeDoc(d))}</b> ${DOC_ST(d)}<div class="small muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${dBR(String(d.enviadoEm).slice(0, 10))}${medTx(d)} · ${esc(d.nome)}${d.assinadoPor ? ' · ' + esc(d.assinadoPor) : ''}</div></div>
+    ${d.status === 'assinado' ? `<button class="btn sm pri" data-dl="${esc(d.id)}" data-v="assinado">Baixar</button>` : pode ? `<button class="btn sm ghost" data-drm="${esc(d.id)}">Remover</button>` : ''}</div>`).join('') : (hist ? 'Nenhum documento enviado.' : 'Nenhum BMD ou documento enviado ainda.');
   dl.classList.toggle('muted', !L.length);
   ligarDocBtns(el, L);
+  if (!pode) return;
+  let arq = null;
+  const info = () => {
+    const t = $('#dtipo').value; const b = $('#denv'); delete b.dataset.conf;
+    b.textContent = t === 'FF' && !hist ? 'Enviar FF e encerrar a obra' : 'Enviar para ' + o.empreiteira + ' assinar'; b.style.background = '';
+    $('#dinfo').innerHTML = t === 'BMD parcial' && I ? `Este será o <b>BMD parcial nº ${parciais.length + 1}</b>: ${novos.length} poste(s) aprovado(s) desde o anterior · total aprovado ${aprov.length} poste(s), ${fmtUs(I.usMed)} US.`
+      : t === 'FF' && !hist && I ? (I.etapa === 'medida' ? 'Todos os postes estão aprovados. Ao enviar a FF a obra é encerrada e vai para o Histórico.' : `<b style="color:var(--bad)">Atenção:</b> ${I.tot - I.fis} poste(s) ainda sem aprovação. Ao enviar a FF a obra é encerrada mesmo assim.`)
+      : t === 'BMD final' ? 'BMD final, emitido depois da FF.' : '';
+  };
+  $('#dtipo').onchange = info; info();
+  $('#dfile').onchange = e => { arq = e.target.files[0] || null; $('#dfn').textContent = arq ? arq.name : 'Escolher PDF'; $('#denv').disabled = !arq };
+  $('#denv').onclick = async e => {
+    const b = e.currentTarget; if (!arq) return; if (arq.size > 20e6) { toast('PDF muito grande (máx. 20 MB)', 1); return }
+    const t = $('#dtipo').value;
+    if (t === 'FF' && !hist && !b.dataset.conf) { b.dataset.conf = 1; b.textContent = 'Confirmar: enviar a FF e encerrar'; b.style.background = 'var(--bad)'; return }
+    b.disabled = true; b.textContent = 'Enviando…';
+    try {
+      const extra = t === 'BMD parcial' && I ? { medicao: { postes: aprov, qtd: aprov.length, us: +I.usMed.toFixed(3), novos: novos.length } } : {};
+      const j = await api(s, 'enviarDocumento', Object.assign({ obra: o.id, tipo: t, pdf: { b64: await blobB64(arq), nome: arq.name } }, extra));
+      delete DOCS_CACHE[o.id];
+      if (j.encerrada) { toast('FF enviada: obra encerrada e movida para o Histórico'); await sincronizar(); go('historico'); return }
+      toast(t === 'BMD parcial' ? `BMD parcial nº ${j.documento.parcial} enviado para assinatura` : 'Documento enviado: a empreiteira já pode assinar'); sincronizar(); cardDocsObra(o);
+    } catch (err) { toast(msgServidor(err), 1); b.disabled = false; info() }
+  };
 }
 /* Empreiteira: lista para assinar */
 async function vAssinar(app) {
@@ -1568,7 +1599,7 @@ async function vAssinar(app) {
   const { L, erro } = await listarDocs();
   if (S.view !== 'assinar') return;
   L.sort((a, b) => (a.status === 'assinado') - (b.status === 'assinado') || String(b.enviadoEm).localeCompare(String(a.enviadoEm)));
-  $('#alist').innerHTML = erro && !L.length ? `<div class="fcard empty">${esc(erro)}</div>` : L.length ? L.map(d => `<div class="fcard" data-dv="${esc(d.id)}"><div class="t"><b>${esc(d.tipo)} · ${esc(d.projeto)}</b>${DOC_ST(d)}</div>
+  $('#alist').innerHTML = erro && !L.length ? `<div class="fcard empty">${esc(erro)}</div>` : L.length ? L.map(d => `<div class="fcard" data-dv="${esc(d.id)}"><div class="t"><b>${esc(nomeDoc(d))} · ${esc(d.projeto)}</b>${DOC_ST(d)}</div>
      <div class="s">${esc(d.nome)}${d.pep ? '<br>PEP ' + esc(d.pep) : ''}<br>Enviado ${dtBR(d.enviadoEm)}</div>
      <div style="margin-top:8px">${d.status === 'assinado' ? `<button class="btn sm pri" data-dl="${esc(d.id)}" data-v="assinado">⬇️ Baixar PDF assinado</button>` : `<button class="btn sm dk" data-dv="${esc(d.id)}">✍️ Abrir e assinar</button>`}</div></div>`).join('')
     : `<div class="fcard empty">Nenhum documento para assinar.</div>`;
@@ -1584,7 +1615,7 @@ async function vDoc(app) {
   if (S.view !== 'doc' || S.docId !== id) return;
   if (!d) { $('#dtit').innerHTML = '<b>Documento não encontrado</b>'; return }
   const s = sessDe(d.pref);
-  $('#dtit').innerHTML = `<b>${esc(d.tipo)} · projeto ${esc(d.projeto)}</b><div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(d.nome)} · ${d.status === 'assinado' ? 'assinado por ' + esc(d.assinadoPor) + ' em ' + dtBR(d.assinadoEm) : 'aguardando assinatura de ' + esc(d.empreiteira)}</div>`;
+  $('#dtit').innerHTML = `<b>${esc(nomeDoc(d))} · projeto ${esc(d.projeto)}</b><div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(d.nome)} · ${d.status === 'assinado' ? 'assinado por ' + esc(d.assinadoPor) + ' em ' + dtBR(d.assinadoEm) : 'aguardando assinatura de ' + esc(d.empreiteira)}</div>`;
   let j; try { j = await api(s, 'docPdf', { id, versao: d.status === 'assinado' ? 'assinado' : 'original' }) } catch (e) { $('#dpages').innerHTML = `<div class="card empty">${esc(msgServidor(e))}</div>`; return }
   const bytes = b64Bytes(j.b64);
   const podeAssinar = s.papel === 'empreiteira' && d.status !== 'assinado';
