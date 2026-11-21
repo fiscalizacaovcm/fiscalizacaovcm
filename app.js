@@ -1,7 +1,7 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.10.0';
+const VERSAO_APP = '1.11.0';
 const LIB = {
   pdf: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   pdfw: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
@@ -404,6 +404,7 @@ function vPainel(app) {
   ${S.sess.length > 1 && !S.divFiltro ? '<div class="card" style="margin-top:14px"><h2>Por divisão</h2><div id="pdiv"></div></div>' : ''}
   <div class="card" style="margin-top:14px"><h2>Por empreiteira</h2><div id="emp"></div></div>`;
   ligarFiltroDiv();
+  alertaArmazenamento(app);
   desenharMapa($('#mapa'), ativas.length ? ativas : base);
   desenharGrafico($('#graf'), ativas);
   const at = [];
@@ -1809,9 +1810,58 @@ function vFluxo(app) {
   app.innerHTML = `<div class="${campo ? 'fhead' : ''}" style="${campo ? '' : 'margin-bottom:12px'}"><div class="${campo ? 'who' : 'card'}">
      ${campo ? `<div><b>Como funciona o fluxo</b><div class="small muted">Arraste e use + / − para ver os detalhes</div></div><a class="btn sm ghost" href="#campo" style="text-decoration:none">← Voltar</a>`
       : `<h2 style="margin:0">Fluxo da fiscalização de obras</h2><div class="small muted">Do PEP liberado ao encerramento: quem faz cada etapa. Arraste e use + / − para ver os detalhes.</div>`}</div></div>
-   <div id="fvw" style="height:${campo ? 'calc(100vh - 120px)' : 'calc(100vh - 175px)'};min-height:380px;${campo ? 'margin:0 10px' : ''}"></div>`;
+   ${campo ? '' : '<div class="card" id="armz" style="margin-bottom:12px"><div class="small muted">Carregando armazenamento…</div></div>'}
+   <div id="fvw" style="height:${campo ? 'calc(100vh - 120px)' : 'calc(100vh - 290px)'};min-height:380px;${campo ? 'margin:0 10px' : ''}"></div>`;
+  if (!campo) cardArmazenamento();
   const host = $('#fvw');
   const v = Viewer(host, { img: FLUXO.src, iw: FLUXO.w, ih: FLUXO.h, getMarkers: () => [] });
   // abre com a altura do fluxo preenchendo a tela, a partir do início (arraste para o lado)
   setTimeout(() => { const r = host.getBoundingClientRect(); if (!r.width) return; const zz = Math.min(r.height / FLUXO.h * .94, 1.1); v.focus((r.width / 2) / (FLUXO.w * zz), .5, zz) }, 200);
+}
+
+/* ================= armazenamento (Drive da conta da divisão + células da planilha) ================= */
+const ARM_ALERTA = 0.8;
+async function lerArmazenamento(forcar) {
+  const k = 'fisc.arm'; let c = null; try { c = JSON.parse(sessionStorage.getItem(k) || 'null') } catch (e) { }
+  if (!forcar && c && Date.now() - c.t < 30 * 60000) return c.L;
+  const L = []; const vistos = new Set();
+  for (const s of S.sess.filter(s => s.papel !== 'empreiteira')) {
+    if (vistos.has(s.pref)) continue; vistos.add(s.pref);
+    try { const j = await api(s, 'armazenamento', {}); L.push({ div: s.div, pref: s.pref, drive: j.drive, planilha: j.planilha, em: j.em }) } catch (e) { L.push({ div: s.div, pref: s.pref, erro: e.rede ? 'sem conexão' : (/ação desconhecida/.test(e.message || '') ? 'publique o Codigo.gs novo' : e.message) }) }
+  }
+  try { sessionStorage.setItem(k, JSON.stringify({ t: Date.now(), L })) } catch (e) { }
+  return L;
+}
+const gb = b => (b / 1073741824).toLocaleString('pt-BR', { maximumFractionDigits: b < 1073741824 * 10 ? 2 : 1 }) + ' GB';
+const mi = n => (n / 1e6).toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + ' mi';
+function usoArm(a) {
+  const d = a.drive && a.drive.limite ? a.drive.usado / a.drive.limite : null;
+  const p = a.planilha ? a.planilha.celulas / a.planilha.limite : null;
+  return { d, p, max: Math.max(d || 0, p || 0) };
+}
+function barraArm(rot, frac, tx) {
+  const cor = frac >= ARM_ALERTA ? 'var(--bad)' : frac >= .6 ? 'var(--alt)' : 'var(--ok)';
+  return `<div style="flex:1;min-width:240px"><div style="display:flex;justify-content:space-between" class="small"><b>${rot}</b><span style="color:${cor};font-weight:700">${fmt1(frac * 100)}%</span></div>
+    <div class="bar" style="height:10px;margin:5px 0"><i style="width:${Math.min(100, frac * 100)}%;background:${cor}"></i></div><div class="small muted">${tx}</div></div>`;
+}
+async function cardArmazenamento(forcar) {
+  const el = $('#armz'); if (!el) return;
+  const L = await lerArmazenamento(forcar); if (!$('#armz')) return;
+  el.innerHTML = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><h3 style="margin:0;flex:1">Armazenamento</h3><span class="small muted">${L[0] && L[0].em ? 'lido às ' + new Date(L[0].em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : ''}</span><button class="btn sm ghost" id="armup">Atualizar</button></div>` +
+    L.map(a => { if (a.erro) return `<div class="small"><b>${esc(a.div)}</b> · <span class="muted">${esc(a.erro)}</span></div>`; const u = usoArm(a);
+      return `<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">${L.length > 1 ? `<b style="min-width:70px">${esc(a.div)}</b>` : ''}
+        ${u.d != null ? barraArm('Google Drive da conta', u.d, `${gb(a.drive.usado)} de ${gb(a.drive.limite)} · fotos, PDFs, plantas e documentos (o Gmail da conta também conta)`) : '<div class="small muted">Drive: não foi possível ler</div>'}
+        ${barraArm('Planilha', u.p, `${mi(a.planilha.celulas)} de 10 mi de células (limite do Google Sheets)`)}</div>
+        ${u.max >= ARM_ALERTA ? `<div class="note" style="margin-top:8px;background:#fee2e2;border-color:#fecaca;color:#991b1b">⚠️ ${esc(a.div)} passou de ${ARM_ALERTA * 100}% em ${u.d >= ARM_ALERTA ? 'Drive' : 'planilha'}. É hora de planejar a limpeza ou a migração (arquivar fotos antigas, outra conta ou GCP).</div>` : ''}`;
+    }).join('<hr style="border:0;border-top:1px solid var(--ln);margin:10px 0">');
+  $('#armup').onclick = () => { el.innerHTML = '<div class="small muted">Atualizando…</div>'; cardArmazenamento(true) };
+}
+async function alertaArmazenamento(app) {
+  if (!S.sess.some(s => s.papel === 'gestor')) return;
+  const L = await lerArmazenamento(); if (S.view !== 'painel') return;
+  const altos = L.filter(a => !a.erro && usoArm(a).max >= ARM_ALERTA); if (!altos.length || $('#armalert')) return;
+  const d = document.createElement('a'); d.id = 'armalert'; d.href = '#fluxo'; d.className = 'note';
+  d.style.cssText = 'display:block;margin-bottom:12px;background:#fee2e2;border-color:#fecaca;color:#991b1b;text-decoration:none';
+  d.innerHTML = `⚠️ Armazenamento alto: ${altos.map(a => `${esc(a.div)} em ${fmt1(usoArm(a).max * 100)}%`).join(' · ')}. Toque para ver os detalhes.`;
+  app.prepend(d);
 }

@@ -7,7 +7,7 @@
  * Para atualizar o código depois: Implantar > Gerenciar implantações > ✏️ > Versão: Nova versão > Implantar.
  * NUNCA use "Nova implantação" de novo, porque o endereço muda e o app perde a conexão.
  */
-const VERSAO_SERVIDOR = '1.8';
+const VERSAO_SERVIDOR = '1.9';
 
 const COLS_OBRAS = ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us',
   'empenhoEm', 'prazo', 'status', 'lat', 'lon', 'locOrigem', 'plantaId', 'plantaW', 'plantaH', 'pdfId', 'pdfNome',
@@ -173,6 +173,7 @@ function doPost(e) {
       case 'concluir': return json(concluir(p, req));
       case 'reabrir': return json(reabrir(p, req));
       case 'historico': return json(historico(p));
+      case 'armazenamento': return json(armazenamento(p));
       case 'obraHistorico': return json(obraHistorico(p, req));
       case 'registrar': return json(registrar(p, req));
       case 'fiscalizarLote': return json(fiscalizarLote(p, req));
@@ -895,4 +896,15 @@ function removerAes(p, req) {
     if (n) marcarAlteracao();
   });
   return { ok: true, removidos: n };
+}
+
+/* ============================ armazenamento (Drive da conta + células da planilha) ============================ */
+function armazenamento(p) {
+  if (p.papel === 'empreiteira') return { ok: false, erro: 'sem permissão' };
+  const ss = SpreadsheetApp.getActive();
+  const abas = ss.getSheets().map(function (sh) { return { nome: sh.getName(), linhas: sh.getMaxRows(), colunas: sh.getMaxColumns() }; });
+  const celulas = abas.reduce(function (t, a) { return t + a.linhas * a.colunas; }, 0);
+  let usado = null, limite = null;
+  try { usado = DriveApp.getStorageUsed(); limite = DriveApp.getStorageLimit(); } catch (e) { }
+  return { ok: true, drive: { usado: usado, limite: limite }, planilha: { celulas: celulas, limite: 10000000, abas: abas }, em: agoraIso() };
 }
