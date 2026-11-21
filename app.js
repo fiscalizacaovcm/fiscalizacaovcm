@@ -584,7 +584,7 @@ function abasFolhas(host, n, atual, rot, onPick) {
   host.appendChild(t);
 }
 /** Recria o visualizador num elemento novo (evita eventos duplicados ao trocar de folha). */
-function hostLimpo(sel) { const old = $(sel); const nw = document.createElement('div'); nw.id = old.id; old.replaceWith(nw); return nw }
+function hostLimpo(sel) { const old = $(sel); const nw = document.createElement('div'); nw.id = old.id; if (old.dataset.h) { nw.dataset.h = old.dataset.h; nw.style.height = old.dataset.h } old.replaceWith(nw); return nw }
 function montarPlanta(o, opts) {
   if (FOLHA >= o.folhas.length) FOLHA = 0;
   const fo = o.folhas[FOLHA], W = Math.max(fo.w, fo.h);
@@ -1992,7 +1992,7 @@ async function vPdes(app) {
 function detalhePde(d) {
   const o = getObra(d.obra); const kv = (k, v) => v ? `<b>${k}</b><span>${v}</span>` : '';
   openLayer(`<div class="ov" id="pdov"><div class="box" style="max-width:1100px;width:96vw;padding:0;overflow:hidden"><div style="display:grid;grid-template-columns:minmax(0,1.4fr) minmax(320px,1fr);min-height:70vh">
-    <div style="position:relative;background:#eef1f5">${o ? '<div id="vw" style="height:min(80vh,760px)"></div>' : '<div class="empty">Obra não está mais ativa: planta indisponível.</div>'}</div>
+    <div style="position:relative;background:#eef1f5">${o ? '<div id="vw" data-h="min(80vh,760px)"></div>' : '<div class="empty">Obra não está mais ativa: planta indisponível.</div>'}</div>
     <div style="padding:18px;overflow:auto;max-height:86vh"><div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0">${esc(d.tipo)} · ${esc(d.projeto)}</h2><button class="btn sm ghost" id="pdx">Fechar</button></div>
      <div style="margin:6px 0 10px">${pdeChip(d)}</div>
      <div class="kv">${kv('Data', `${dBR(d.data)} · ${esc(d.horaIni)} às ${esc(d.horaFim)}`)}${kv('Empreiteira', esc(d.empreiteira))}${kv('Município', esc(d.municipio))}${kv('PEP', esc(d.pep))}
