@@ -20,6 +20,7 @@
         <flowNodeRef>t_enc</flowNodeRef>
         <flowNodeRef>t_car</flowNodeRef>
         <flowNodeRef>g_par</flowNodeRef>
+        <flowNodeRef>t_hist</flowNodeRef>
         <childLaneSet id="Id_6001e729-adfd-478c-85f3-d107ffb24be8" />
       </lane>
       <lane id="L_emp" name="Empreiteira · equipe de campo">
@@ -34,6 +35,7 @@
         <flowNodeRef>t_fis</flowNodeRef>
         <flowNodeRef>g_ok</flowNodeRef>
         <flowNodeRef>t_apr</flowNodeRef>
+        <flowNodeRef>t_parc</flowNodeRef>
         <flowNodeRef>t_sap</flowNodeRef>
         <flowNodeRef>t_env</flowNodeRef>
         <flowNodeRef>t_arq</flowNodeRef>
@@ -327,7 +329,7 @@
         </bizagi:BizagiExtensions>
       </extensionElements>
     </sequenceFlow>
-    <sequenceFlow id="f13" name="Não: próximo poste" sourceRef="g_tod" targetRef="t_fis">
+    <sequenceFlow id="f13" name="Não" sourceRef="g_tod" targetRef="t_parc">
       <extensionElements>
         <bizagi:BizagiExtensions xmlns:bizagi="http://www.bizagi.com/bpmn20">
           <bizagi:BizagiProperties>
@@ -379,7 +381,7 @@
         </bizagi:BizagiExtensions>
       </extensionElements>
     </sequenceFlow>
-    <sequenceFlow id="f17" name="" sourceRef="t_env" targetRef="t_ass">
+    <sequenceFlow id="f17" name="" sourceRef="t_env" targetRef="t_hist">
       <extensionElements>
         <bizagi:BizagiExtensions xmlns:bizagi="http://www.bizagi.com/bpmn20">
           <bizagi:BizagiProperties>
@@ -687,7 +689,7 @@
       </extensionElements>
       <incoming>f7</incoming>
       <incoming>f11</incoming>
-      <incoming>f13</incoming>
+      <incoming>f13b</incoming>
       <outgoing>f8</outgoing>
     </userTask>
     <userTask id="t_apr" name="Aprovar poste · medido">
@@ -722,7 +724,7 @@
       <incoming>f10</incoming>
       <outgoing>f11</outgoing>
     </userTask>
-    <scriptTask id="t_enc" name="Encerramento final: obra vai para o Histórico e sai do painel">
+    <scriptTask id="t_enc" name="Obra medida: todos os postes aprovados, aguardando a FF">
       <extensionElements>
         <bizagi:BizagiExtensions xmlns:bizagi="http://www.bizagi.com/bpmn20">
           <bizagi:BizagiProperties>
@@ -738,7 +740,7 @@
       <outgoing>f15</outgoing>
       <script />
     </scriptTask>
-    <scriptTask id="t_sap" name="Medição final e emissão da FF e do BMD no SAP">
+    <scriptTask id="t_sap" name="Medição final e emissão da FF no SAP">
       <extensionElements>
         <bizagi:BizagiExtensions xmlns:bizagi="http://www.bizagi.com/bpmn20">
           <bizagi:BizagiProperties>
@@ -754,7 +756,7 @@
       <outgoing>f16</outgoing>
       <script />
     </scriptTask>
-    <scriptTask id="t_env" name="Enviar PDF do BMD, FF e vistoria para assinatura">
+    <scriptTask id="t_env" name="Enviar a FF (e BMD final / vistoria) no app">
       <extensionElements>
         <bizagi:BizagiExtensions xmlns:bizagi="http://www.bizagi.com/bpmn20">
           <bizagi:BizagiProperties>
@@ -783,7 +785,7 @@
           </bizagi:BizagiProperties>
         </bizagi:BizagiExtensions>
       </extensionElements>
-      <incoming>f17</incoming>
+      <incoming>f17c</incoming>
       <outgoing>f18</outgoing>
     </userTask>
     <scriptTask id="t_car" name="Aplicar assinatura, carimbo e folha de assinatura (SHA-256) e guardar">
@@ -834,6 +836,63 @@
       <incoming>f21</incoming>
       <outgoing>f23</outgoing>
     </userTask>
+    <userTask id="t_parc" name="BMD parcial dos postes já aprovados (opcional, pode haver vários)">
+      <extensionElements>
+        <bizagi:BizagiExtensions xmlns:bizagi="http://www.bizagi.com/bpmn20">
+          <bizagi:BizagiProperties>
+            <bizagi:BizagiProperty name="bgColor" value="#ECEFFF" />
+            <bizagi:BizagiProperty name="borderColor" value="#03689A" />
+            <bizagi:BizagiProperty name="textColor" value="Black" />
+            <bizagi:BizagiProperty name="textBackgroundColor" value="Transparent" />
+            <bizagi:BizagiProperty name="textDirection" value="" />
+          </bizagi:BizagiProperties>
+        </bizagi:BizagiExtensions>
+      </extensionElements>
+      <incoming>f13</incoming>
+      <outgoing>f13b</outgoing>
+    </userTask>
+    <scriptTask id="t_hist" name="Encerrar a obra: vai para o Histórico e sai do painel">
+      <extensionElements>
+        <bizagi:BizagiExtensions xmlns:bizagi="http://www.bizagi.com/bpmn20">
+          <bizagi:BizagiProperties>
+            <bizagi:BizagiProperty name="bgColor" value="#ECEFFF" />
+            <bizagi:BizagiProperty name="borderColor" value="#03689A" />
+            <bizagi:BizagiProperty name="textColor" value="Black" />
+            <bizagi:BizagiProperty name="textBackgroundColor" value="Transparent" />
+            <bizagi:BizagiProperty name="textDirection" value="" />
+          </bizagi:BizagiProperties>
+        </bizagi:BizagiExtensions>
+      </extensionElements>
+      <incoming>f17</incoming>
+      <outgoing>f17c</outgoing>
+      <script />
+    </scriptTask>
+    <sequenceFlow id="f13b" name="" sourceRef="t_parc" targetRef="t_fis">
+      <extensionElements>
+        <bizagi:BizagiExtensions xmlns:bizagi="http://www.bizagi.com/bpmn20">
+          <bizagi:BizagiProperties>
+            <bizagi:BizagiProperty name="bgColor" value="White" />
+            <bizagi:BizagiProperty name="borderColor" value="Black" />
+            <bizagi:BizagiProperty name="textColor" value="Black" />
+            <bizagi:BizagiProperty name="textBackgroundColor" value="Transparent" />
+            <bizagi:BizagiProperty name="textDirection" value="" />
+          </bizagi:BizagiProperties>
+        </bizagi:BizagiExtensions>
+      </extensionElements>
+    </sequenceFlow>
+    <sequenceFlow id="f17c" name="" sourceRef="t_hist" targetRef="t_ass">
+      <extensionElements>
+        <bizagi:BizagiExtensions xmlns:bizagi="http://www.bizagi.com/bpmn20">
+          <bizagi:BizagiProperties>
+            <bizagi:BizagiProperty name="bgColor" value="White" />
+            <bizagi:BizagiProperty name="borderColor" value="Black" />
+            <bizagi:BizagiProperty name="textColor" value="Black" />
+            <bizagi:BizagiProperty name="textBackgroundColor" value="Transparent" />
+            <bizagi:BizagiProperty name="textDirection" value="" />
+          </bizagi:BizagiProperties>
+        </bizagi:BizagiExtensions>
+      </extensionElements>
+    </sequenceFlow>
     <textAnnotation id="Id_d715edcb-d534-4bf7-8197-05e2e102f868">
       <extensionElements>
         <bizagi:BizagiExtensions xmlns:bizagi="http://www.bizagi.com/bpmn20">
@@ -905,7 +964,7 @@
       <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
       <BPMNShape id="DiagramElement_a35a185b-2135-42d6-ba40-b122e7abf5d5" bpmnElement="P_fisc" isHorizontal="true">
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <Bounds x="60" y="40" width="4008" height="698" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+        <Bounds x="60" y="40" width="4188" height="698" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
         <BPMNLabel id="DiagramElement_f744c3e7-13cf-410b-8f7e-5dfd990f96b4" labelStyle="Style_b809f5cc-3709-44eb-af07-aecbc2530e18">
           <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
           <Bounds x="60" y="40" width="0" height="0" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
@@ -913,34 +972,34 @@
       </BPMNShape>
       <BPMNShape id="DiagramElement_c9d60e37-744c-4d9b-b41f-ec55d16229d5" bpmnElement="L_ges" isHorizontal="true">
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <Bounds x="50" y="40" width="3958" height="170" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+        <Bounds x="50" y="40" width="4138" height="170" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
         <BPMNLabel id="DiagramElement_126f062e-7835-4478-9474-23d32d0c8a0f" labelStyle="Style_8302d387-166d-48cc-a460-c821c74fd923">
           <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-          <Bounds x="110" y="40" width="3958" height="170" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+          <Bounds x="110" y="40" width="4138" height="170" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
         </BPMNLabel>
       </BPMNShape>
       <BPMNShape id="DiagramElement_9baea148-03be-4145-aef6-27efd1d64aac" bpmnElement="L_sis" isHorizontal="true">
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <Bounds x="50" y="210" width="3958" height="188" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+        <Bounds x="50" y="210" width="4138" height="188" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
         <BPMNLabel id="DiagramElement_ce903a17-2264-4355-819f-ea660897de37" labelStyle="Style_a048a74c-33c1-4f52-b10a-3f5393ba5363">
           <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-          <Bounds x="110" y="210" width="3958" height="188" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+          <Bounds x="110" y="210" width="4138" height="188" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
         </BPMNLabel>
       </BPMNShape>
       <BPMNShape id="DiagramElement_69eac6e3-1554-40aa-b050-a7e63cac24c7" bpmnElement="L_emp" isHorizontal="true">
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <Bounds x="50" y="398" width="3958" height="170" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+        <Bounds x="50" y="398" width="4138" height="170" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
         <BPMNLabel id="DiagramElement_5fcd3bef-c1c4-43cd-8251-f2fc86790fdf" labelStyle="Style_266310f4-82c8-4ba2-966f-fc1465f5eaf5">
           <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-          <Bounds x="110" y="398" width="3958" height="170" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+          <Bounds x="110" y="398" width="4138" height="170" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
         </BPMNLabel>
       </BPMNShape>
       <BPMNShape id="DiagramElement_3199c3f7-ae82-4bae-90e6-de25c644f379" bpmnElement="L_fis" isHorizontal="true">
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <Bounds x="50" y="568" width="3958" height="170" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+        <Bounds x="50" y="568" width="4138" height="170" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
         <BPMNLabel id="DiagramElement_d4709381-bf22-4677-b139-d7370c8ddcf5" labelStyle="Style_0c172dec-6d7b-4de2-b72b-b1c5cd63e67d">
           <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-          <Bounds x="110" y="568" width="3958" height="170" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+          <Bounds x="110" y="568" width="4138" height="170" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
         </BPMNLabel>
       </BPMNShape>
       <BPMNShape id="DiagramElement_66940f53-4a67-465f-af8f-f6bddc6998c5" bpmnElement="ini">
@@ -969,22 +1028,22 @@
       </BPMNShape>
       <BPMNShape id="DiagramElement_5eeb26af-0994-4edc-9495-3492937e588e" bpmnElement="g_par">
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <Bounds x="3567" y="270" width="50" height="50" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+        <Bounds x="3747" y="270" width="50" height="50" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
       </BPMNShape>
       <BPMNShape id="DiagramElement_a5d132cb-4279-4ff2-a158-8de617c28fce" bpmnElement="fim_e">
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <Bounds x="3930" y="465" width="36" height="36" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+        <Bounds x="4110" y="465" width="36" height="36" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
         <BPMNLabel id="DiagramElement_4b7d9cbe-ed8e-4720-8f5f-54a6692551a0" labelStyle="Style_55b331dc-4406-49b5-ae80-c985180948b1">
           <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-          <Bounds x="3893" y="505" width="90" height="36" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+          <Bounds x="4073" y="505" width="90" height="36" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
         </BPMNLabel>
       </BPMNShape>
       <BPMNShape id="DiagramElement_7397b7e5-023f-4c8f-bed7-b648db3e254b" bpmnElement="fim_g">
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <Bounds x="3930" y="635" width="36" height="36" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+        <Bounds x="4110" y="635" width="36" height="36" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
         <BPMNLabel id="DiagramElement_28e77a19-4a1b-4d13-974d-bd5341954570" labelStyle="Style_05f250e8-16ec-4e4c-85f5-6441353d71b7">
           <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-          <Bounds x="3893" y="675" width="90" height="36" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+          <Bounds x="4073" y="675" width="90" height="36" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
         </BPMNLabel>
       </BPMNShape>
       <BPMNEdge id="DiagramElement_f181e9b1-960d-4228-b659-a45086efb683" bpmnElement="f1">
@@ -1129,8 +1188,8 @@
       <BPMNEdge id="DiagramElement_742d0edc-482f-4ce0-a645-0fbe5e8095b9" bpmnElement="f12">
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
         <waypoint x="2411" y="653" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="2455" y="653" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="2455" y="295" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="2435" y="653" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="2435" y="295" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
         <waypoint x="2499" y="295" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
         <BPMNLabel id="DiagramElement_6431e66d-e58e-467e-8edd-2f9a5ed7a82d" labelStyle="Style_fe6df71a-f018-4efc-9e82-a80da4a9297c">
           <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
@@ -1140,12 +1199,10 @@
       <BPMNEdge id="DiagramElement_a081512e-5278-4fdc-8fd5-947a15770523" bpmnElement="f13">
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
         <waypoint x="2524" y="320" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="2524" y="444" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="1990" y="444" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="1990" y="616" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="2524" y="616" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
         <BPMNLabel id="DiagramElement_a7279733-7607-4d7a-bc32-9d25725c13f2" labelStyle="Style_a7901057-f497-43d9-91cb-3ef3b8444f17">
           <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-          <Bounds x="2030" y="413" width="90" height="36" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+          <Bounds x="2530" y="520" width="40" height="20" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
         </BPMNLabel>
       </BPMNEdge>
       <BPMNEdge id="DiagramElement_60a448c7-9e11-466a-b6b8-24bc14f0bcbc" bpmnElement="f14">
@@ -1181,8 +1238,8 @@
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
         <waypoint x="3123" y="653" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
         <waypoint x="3147" y="653" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="3147" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="3171" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="3147" y="295" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="3171" y="295" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
         <BPMNLabel id="DiagramElement_b8dbe93d-676e-48ca-92a2-59cde69bebb2" labelStyle="Style_499b5b88-8a9a-4e13-8a12-bed9cff361f3">
           <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
           <Bounds x="3123" y="125" width="90" height="60" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
@@ -1190,19 +1247,19 @@
       </BPMNEdge>
       <BPMNEdge id="DiagramElement_c1bd9fbd-c7e6-4ddc-96ea-249673e76058" bpmnElement="f18">
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="3301" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="3325" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="3325" y="295" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="3349" y="295" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="3481" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="3505" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="3505" y="295" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="3529" y="295" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
         <BPMNLabel id="DiagramElement_4ca08ffa-0430-45b5-b5e4-91dcc232fb9e" labelStyle="Style_0c187dfe-e9f0-4ea8-9dfc-cc82c425f760">
           <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-          <Bounds x="3301" y="295" width="90" height="60" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+          <Bounds x="3481" y="295" width="90" height="60" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
         </BPMNLabel>
       </BPMNEdge>
       <BPMNEdge id="DiagramElement_d4ec292d-0321-4a7a-97d8-bf34a8d01ddd" bpmnElement="f19">
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="3479" y="295" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="3567" y="295" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="3659" y="295" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="3747" y="295" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
         <BPMNLabel id="DiagramElement_581c68ce-95b7-4be2-9dcb-f99dcce2f2e2" labelStyle="Style_1e8bee23-4e50-46a6-9b8d-fe4cfab2f8ec">
           <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
           <Bounds x="0" y="0" width="0" height="0" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
@@ -1210,20 +1267,20 @@
       </BPMNEdge>
       <BPMNEdge id="DiagramElement_8a2731a7-6dd5-45fc-95d9-2534aec13e68" bpmnElement="f20">
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="3592" y="320" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="3592" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="3705" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="3772" y="320" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="3772" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="3885" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
         <BPMNLabel id="DiagramElement_cab34516-7090-4e8b-9d8e-7db3ecc01c3c" labelStyle="Style_7445f273-b2a3-4127-b56d-f51101537fb8">
           <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-          <Bounds x="3592" y="320" width="90" height="60" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+          <Bounds x="3772" y="320" width="90" height="60" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
         </BPMNLabel>
       </BPMNEdge>
       <BPMNEdge id="DiagramElement_4bfd6d0a-34b5-4a3e-8b9d-999be4dc2cab" bpmnElement="f21">
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="3617" y="295" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="3660" y="295" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="3660" y="653" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="3705" y="653" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="3797" y="295" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="3840" y="295" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="3840" y="653" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="3885" y="653" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
         <BPMNLabel id="DiagramElement_6a4706ba-5740-44bb-9f08-4dc864da9055" labelStyle="Style_ab7533cd-7d40-49c6-b653-849856d99b81">
           <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
           <Bounds x="0" y="0" width="0" height="0" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
@@ -1231,17 +1288,17 @@
       </BPMNEdge>
       <BPMNEdge id="DiagramElement_21220411-8ca6-483e-968b-eaff72f1c3e1" bpmnElement="f22">
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="3835" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="3930" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="4015" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="4110" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
         <BPMNLabel id="DiagramElement_a076b860-ec1a-47e2-8ce3-aaac47166394" labelStyle="Style_0190b9e7-28d2-457c-874c-cc6a448df298">
           <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-          <Bounds x="3835" y="465" width="90" height="60" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+          <Bounds x="4015" y="465" width="90" height="60" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
         </BPMNLabel>
       </BPMNEdge>
       <BPMNEdge id="DiagramElement_44de92d8-45ba-4da4-b9c5-47c4a4f56b09" bpmnElement="f23">
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="3835" y="653" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <waypoint x="3930" y="653" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="4015" y="653" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="4110" y="653" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
         <BPMNLabel id="DiagramElement_a35a03e7-3cc7-4d4d-9159-a05ed708e9f6" labelStyle="Style_0f39f5b6-2283-410c-8553-b9eee086c722">
           <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
           <Bounds x="0" y="0" width="0" height="0" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
@@ -1395,7 +1452,7 @@
       </BPMNShape>
       <BPMNShape id="DiagramElement_bbdb6637-bf0d-4fd1-afad-905252ba8725" bpmnElement="t_ass">
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <Bounds x="3171" y="446" width="130" height="74" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+        <Bounds x="3351" y="446" width="130" height="74" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
         <BPMNLabel id="DiagramElement_031931e8-c2ca-4e02-9a7d-9b04a57bb432" labelStyle="Style_ef2e8a61-646c-4e9d-9db6-2ea32021bb38">
           <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
           <Bounds x="0" y="0" width="130" height="74" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
@@ -1403,7 +1460,7 @@
       </BPMNShape>
       <BPMNShape id="DiagramElement_6b26eb9a-9502-4573-8a09-17132d364f7a" bpmnElement="t_car">
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <Bounds x="3349" y="258" width="130" height="74" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+        <Bounds x="3529" y="258" width="130" height="74" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
         <BPMNLabel id="DiagramElement_afce3684-bbd8-49e2-8aa8-aa747c04edc8" labelStyle="Style_66ea28d8-b278-4aa9-ab1f-87e0eeb504ae">
           <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
           <Bounds x="0" y="0" width="0" height="0" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
@@ -1411,7 +1468,7 @@
       </BPMNShape>
       <BPMNShape id="DiagramElement_ffd87bd2-2d11-4110-b38b-947624c189ca" bpmnElement="t_bx">
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <Bounds x="3705" y="446" width="130" height="74" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+        <Bounds x="3885" y="446" width="130" height="74" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
         <BPMNLabel id="DiagramElement_a2e9f3a0-82e5-4e42-ad5d-35c08d7fa5e0" labelStyle="Style_543052c2-a8eb-4ec6-a70e-f4ad3f4c62d6">
           <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
           <Bounds x="0" y="0" width="130" height="74" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
@@ -1419,7 +1476,7 @@
       </BPMNShape>
       <BPMNShape id="DiagramElement_0a0fe5bc-07f0-4d0b-a783-7a5916eb6e55" bpmnElement="t_arq">
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
-        <Bounds x="3705" y="616" width="130" height="74" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+        <Bounds x="3885" y="616" width="130" height="74" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
         <BPMNLabel id="DiagramElement_6009e89b-b64b-4ea1-b726-a40c7cc3fc7b" labelStyle="Style_7335ff4c-7862-454b-ba19-0f15ff0bf030">
           <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
           <Bounds x="0" y="0" width="0" height="0" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
@@ -1442,6 +1499,29 @@
         <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
         <Bounds x="30" y="30" width="0" height="0" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
       </BPMNShape>
+      <BPMNShape id="DI_t_parc" bpmnElement="t_parc">
+        <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <Bounds x="2459" y="616" width="130" height="74" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+      </BPMNShape>
+      <BPMNShape id="DI_t_hist" bpmnElement="t_hist">
+        <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <Bounds x="3171" y="258" width="130" height="74" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+      </BPMNShape>
+      <BPMNEdge id="DI_f13b" bpmnElement="f13b">
+        <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="2589" y="653" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="2620" y="653" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="2620" y="424" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="1990" y="424" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="1990" y="616" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+      </BPMNEdge>
+      <BPMNEdge id="DI_f17c" bpmnElement="f17c">
+        <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="3301" y="295" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="3326" y="295" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="3326" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="3351" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+      </BPMNEdge>
     </BPMNPlane>
     <BPMNLabelStyle id="Style_b809f5cc-3709-44eb-af07-aecbc2530e18">
       <Font name="Segoe UI" size="8" isBold="false" isItalic="false" isUnderline="false" isStrikeThrough="false" xmlns="http://www.omg.org/spec/DD/20100524/DC" />

@@ -1804,7 +1804,7 @@ async function carimbarPdf(bytes, a) {
 }
 
 /* ================= fluxo do processo (BPMN) ================= */
-const FLUXO = { src: './fluxo.svg', w: 4048, h: 718 };
+const FLUXO = { src: './fluxo.svg?v=2', w: 4228, h: 718 };
 function vFluxo(app) {
   const campo = S.mode === 'campo';
   app.innerHTML = `<div class="${campo ? 'fhead' : ''}" style="${campo ? '' : 'margin-bottom:12px'}"><div class="${campo ? 'who' : 'card'}">
