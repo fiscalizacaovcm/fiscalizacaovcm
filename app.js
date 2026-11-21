@@ -1,7 +1,7 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.6.0';
+const VERSAO_APP = '1.7.0';
 const LIB = {
   pdf: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   pdfw: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
@@ -329,6 +329,7 @@ function route() {
   else if (h === 'conta') { S.view = 'conta'; S.mode = S.mode || (soCampo ? 'campo' : 'gestao') }
   else if (h === 'assinar' || /^doc-/.test(h)) { S.mode = soCampo ? 'campo' : (h === 'assinar' ? 'campo' : (S.mode || 'gestao')); S.view = h === 'assinar' ? 'assinar' : 'doc'; S.docId = h.slice(4) }
   else if (h === 'docs' && !soCampo) { S.mode = 'gestao'; S.view = 'docs' }
+  else if (h === 'assinatura') { S.mode = 'campo'; S.view = 'assinatura' }
   else if (m || soCampo) { S.mode = 'campo'; S.view = m && m[2] ? 'fobra' : 'flist'; S.obraId = m && m[2] ? m[2] : null }
   else {
     m = h.match(/^obra-(.+)$/); const mh = h.match(/^hist-(.+)$/);
@@ -357,13 +358,13 @@ let VIEWER = null;
 function render(fromData) {
   const app = $('#app');
   if (S.view === 'login') { vLogin(app); return }
-  if (fromData && (S.view === 'nova' || S.view === 'conta' || S.view === 'historico' || S.view === 'hobra' || S.view === 'docs' || S.view === 'doc' || S.view === 'assinar')) return;
+  if (fromData && (S.view === 'nova' || S.view === 'conta' || S.view === 'historico' || S.view === 'hobra' || S.view === 'docs' || S.view === 'doc' || S.view === 'assinar' || S.view === 'assinatura')) return;
   if (fromData && S.view === 'fobra' && VIEWER && VIEWER.obraId === S.obraId) { VIEWER.refresh(); updFbot(); return }
   if (fromData && S.view === 'obra' && VIEWER && VIEWER.obraId === S.obraId) { VIEWER.refresh(); renderObraSide(); return }
   if (S.view === 'conta') { VIEWER = null; vConta(app); return }
   if (!S.carregado) { app.innerHTML = `<div class="empty">Carregando…</div>`; return }
   VIEWER = null;
-  ({ painel: vPainel, obras: vObras, nova: vNova, obra: vObra, flist: vFlist, fobra: vFobra, historico: vHistorico, hobra: vHObra, docs: vDocs, doc: vDoc, assinar: vAssinar }[S.view] || vPainel)(app);
+  ({ painel: vPainel, obras: vObras, nova: vNova, obra: vObra, flist: vFlist, fobra: vFobra, historico: vHistorico, hobra: vHObra, docs: vDocs, doc: vDoc, assinar: vAssinar, assinatura: vAssinatura }[S.view] || vPainel)(app);
 }
 function filtroDivHtml() {
   if (S.sess.length < 2) return '';
@@ -1014,6 +1015,7 @@ function vFlist(app) {
   app.innerHTML = `<div class="fhead"><div class="who"><div><b>${esc(S.nome)}</b><div class="small muted">${copel ? 'Copel · fiscalização' : esc(s0.empresa)} · ${esc(S.sess.map(s => s.div).join(', '))}</div></div><a class="btn sm ghost" href="#conta" style="text-decoration:none">Conta</a></div>
    ${S.fila.length ? `<div class="note" style="margin-top:10px">${S.fila.length} registro(s) aguardando sinal para enviar. <button class="btn sm" id="envf">Tentar agora</button></div>` : ''}
    ${!copel && docsTotal() ? `<a class="fcard" href="#assinar" style="display:block;margin-top:10px;text-decoration:none;color:inherit;${docsPend() ? 'background:#fff7ed;border:1px solid #fed7aa' : ''}"><b>📄 ${docsPend() ? docsPend() + ' documento(s) aguardando sua assinatura' : 'Documentos assinados'}</b><div class="small muted">BMD, FF e vistoria enviados pela Copel${docsPend() ? ' · toque para assinar' : ' · toque para baixar'}</div></a>` : ''}
+   ${!copel && !assTotal() ? `<a class="fcard" href="#assinatura" style="display:block;margin-top:10px;text-decoration:none;color:inherit;background:#eff6ff;border:1px solid #bfdbfe"><b>✍️ Cadastre a assinatura da empresa</b><div class="small muted">O responsável (dono ou supervisor) desenha a assinatura e cria um PIN uma vez; depois assina BMD e FF com um toque.</div></a>` : ''}
    <div id="inst"></div></div>
    <div class="flist">${L.length ? L.map(o => {
     const I = S.idx[o.id]; const d = diasAte(o.prazo); return `<div class="fcard" data-o="${esc(o.id)}"><div class="t"><b>${esc(o.projeto)}</b><span class="pct" style="color:var(--or)">${fmt1(I.pct * 100)}%</span></div>
@@ -1416,6 +1418,12 @@ async function vDocs(app) {
     ligarDocBtns(app, L);
   };
   $('#dq').oninput = draw; $('#dst').onchange = draw; draw();
+  const box = document.createElement('div'); box.className = 'card'; box.style.marginTop = '14px'; box.innerHTML = '<h3>Assinaturas cadastradas pelas empreiteiras</h3><div class="small muted" id="aslst">Carregando…</div>'; app.appendChild(box);
+  const AS = []; for (const s of S.sess.filter(s => s.papel !== 'empreiteira')) { try { ((await api(s, 'assinantes', {})).assinantes || []).forEach(a => AS.push(Object.assign(a, { pref: s.pref }))) } catch (e) { } }
+  if (S.view !== 'docs') return;
+  const al = $('#aslst'); al.classList.toggle('muted', !AS.length);
+  al.innerHTML = AS.length ? `<table><thead><tr><th>Empreiteira</th><th>Responsável</th><th>Cadastrada</th><th>Último uso</th><th></th></tr></thead><tbody>${AS.map(a => `<tr><td>${esc(a.empresa)}</td><td><b>${esc(a.nome)}</b><div class="small muted">${esc(a.cargo || '')}</div></td><td>${dtBR(a.criadoEm)}</td><td>${a.ultimoUso ? dtBR(a.ultimoUso) : '—'}${a.bloqueado ? ' · <b style="color:var(--bad)">bloqueada</b>' : ''}</td><td>${sessDe(a.pref).papel === 'gestor' ? `<button class="btn sm ghost" data-rva="${esc(a.id)}">Revogar</button>` : ''}</td></tr>`).join('')}</tbody></table>` : 'Nenhuma empreiteira cadastrou assinatura ainda. O cadastro é feito pelo responsável da empresa, no app, com o código da empreiteira.';
+  $$('[data-rva]', al).forEach(b => b.onclick = async () => { if (!b.dataset.conf) { b.dataset.conf = 1; b.textContent = 'Confirmar'; return } const a = AS.find(x => x.id === b.dataset.rva); b.disabled = true; try { await api(sessDe(a.pref), 'revogarAssinante', { id: a.id }); toast('Assinatura revogada'); b.closest('tr').remove() } catch (e) { toast(msgServidor(e), 1); b.disabled = false } });
 }
 /* card na tela da obra (Histórico): enviar e acompanhar */
 async function cardDocsObra(o) {
@@ -1444,7 +1452,7 @@ async function cardDocsObra(o) {
 }
 /* Empreiteira: lista para assinar */
 async function vAssinar(app) {
-  app.innerHTML = `<div class="fhead"><div class="who"><div><b>Documentos para assinar</b><div class="small muted">BMD, FF e vistoria enviados pela Copel</div></div><a class="btn sm ghost" href="#campo" style="text-decoration:none">← Obras</a></div></div><div class="flist" id="alist"><div class="fcard empty">Carregando…</div></div>`;
+  app.innerHTML = `<div class="fhead"><div class="who"><div><b>Documentos para assinar</b><div class="small muted">BMD, FF e vistoria enviados pela Copel</div></div><a class="btn sm ghost" href="#campo" style="text-decoration:none">← Obras</a></div></div><div style="padding:0 14px"><a href="#assinatura" class="small">✍️ Assinatura cadastrada da empresa</a></div><div class="flist" id="alist"><div class="fcard empty">Carregando…</div></div>`;
   const { L, erro } = await listarDocs();
   if (S.view !== 'assinar') return;
   L.sort((a, b) => (a.status === 'assinado') - (b.status === 'assinado') || String(b.enviadoEm).localeCompare(String(a.enviadoEm)));
@@ -1471,8 +1479,7 @@ async function vDoc(app) {
   const bar = $('#dbar');
   bar.innerHTML = `<div class="dsign">${podeAssinar ? `<button class="btn pri" id="dass" style="flex:1;padding:14px;font-size:15px">✍️ Assinar documento</button>` : d.status === 'assinado' ? `<button class="btn pri" id="dbx" style="flex:1;padding:12px">⬇️ Baixar PDF assinado</button>` : `<span class="small muted" style="flex:1">Aguardando a assinatura da empreiteira. O download do original não fica disponível para ela antes de assinar.</span>`}</div>`;
   $('#dbx') && ($('#dbx').onclick = () => baixarBytes(bytes, j.nome));
-  $('#dass') && ($('#dass').onclick = () => telaAssinar(d, s, bytes));
-  // páginas
+  $('#dass') && ($('#dass').onclick = () => posicionarAssinatura(d, s, bytes));
   try {
     const lib = await pdfLib(); const doc = await lib.getDocument({ data: bytes.slice(0), isEvalSupported: false, disableFontFace: true }).promise;
     const host = $('#dpages'); const W = Math.min(host.clientWidth || innerWidth, 1100) - 4;
@@ -1480,40 +1487,131 @@ async function vDoc(app) {
       if (S.view !== 'doc') return;
       const pg = await doc.getPage(i); const v1 = pg.getViewport({ scale: 1 }); const sc = W / v1.width * Math.min(2, devicePixelRatio || 1);
       const vp = pg.getViewport({ scale: sc }); const cv = document.createElement('canvas'); cv.width = vp.width; cv.height = vp.height; cv.style.width = W + 'px';
-      host.appendChild(cv); await pg.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+      const wr = document.createElement('div'); wr.className = 'pgw'; wr.dataset.i = i - 1; wr.appendChild(cv); host.appendChild(wr);
+      await pg.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
     }
     if (doc.numPages > 30) host.insertAdjacentHTML('beforeend', `<div class="small muted" style="text-align:center;padding:8px">Mostrando 30 de ${doc.numPages} páginas.</div>`);
   } catch (e) { console.error(e); $('#dpages').innerHTML = `<div class="card empty">Não consegui mostrar o PDF (${esc(e.message || e)}).</div>` }
 }
-function telaAssinar(d, s, bytes) {
+/* ---------- assinatura cadastrada da empreiteira ---------- */
+const assTotal = () => S.sess.reduce((n, s) => n + (((S.raw[s.pref] || {}).docs || {}).assinantes || 0), 0);
+const IMG_ASS = {};
+async function imgAss(s, id) { if (!IMG_ASS[id]) { const j = await api(s, 'imgAssinante', { id }); IMG_ASS[id] = 'data:image/png;base64,' + j.b64 } return IMG_ASS[id] }
+const TERMO_ASS = 'Declaro que sou responsável pela empresa (proprietário, sócio, supervisor ou procurador) e que a assinatura acima e o PIN são pessoais e intransferíveis. Reconheço como válidos, para todos os fins, os documentos (BMD, FF, vistoria e outros) que eu assinar por este aplicativo com esta assinatura e este PIN, nos termos do art. 10, § 2º, da MP 2.200-2/2001.';
+function padAssinatura(cv) {
+  const dpr = devicePixelRatio || 1; cv.width = cv.clientWidth * dpr; cv.height = cv.clientHeight * dpr;
+  const ctx = cv.getContext('2d'); ctx.scale(dpr, dpr); ctx.lineWidth = 2.6; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#0b1f4b';
+  let des = false, vazio = true, last = null;
+  const pt = e => { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top } };
+  cv.onpointerdown = e => { des = true; last = pt(e); try { cv.setPointerCapture(e.pointerId) } catch (er) { } ctx.beginPath(); ctx.arc(last.x, last.y, 1.2, 0, 7); ctx.fillStyle = '#0b1f4b'; ctx.fill(); vazio = false; e.preventDefault() };
+  cv.onpointermove = e => { if (!des) return; const p = pt(e); ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.quadraticCurveTo(last.x, last.y, (last.x + p.x) / 2, (last.y + p.y) / 2); ctx.lineTo(p.x, p.y); ctx.stroke(); last = p; e.preventDefault() };
+  cv.onpointerup = cv.onpointercancel = () => { des = false };
+  return {
+    vazio: () => vazio,
+    limpar() { ctx.clearRect(0, 0, cv.width, cv.height); vazio = true },
+    png() {   // recorta o desenho e devolve PNG (base64, fundo transparente)
+      const D = ctx.getImageData(0, 0, cv.width, cv.height).data; let x0 = cv.width, y0 = cv.height, x1 = 0, y1 = 0;
+      for (let y = 0; y < cv.height; y++) for (let x = 0; x < cv.width; x++) if (D[(y * cv.width + x) * 4 + 3] > 10) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y }
+      if (x1 <= x0 || y1 <= y0) return null;
+      const pad = 6 * dpr; x0 = Math.max(0, x0 - pad); y0 = Math.max(0, y0 - pad); x1 = Math.min(cv.width, x1 + pad); y1 = Math.min(cv.height, y1 + pad);
+      const k = Math.min(1, 700 / (x1 - x0)); const o = document.createElement('canvas'); o.width = Math.round((x1 - x0) * k); o.height = Math.round((y1 - y0) * k);
+      o.getContext('2d').drawImage(cv, x0, y0, x1 - x0, y1 - y0, 0, 0, o.width, o.height);
+      return o.toDataURL('image/png').split(',')[1];
+    }
+  };
+}
+async function vAssinatura(app) {
+  const s = S.sess.find(x => x.papel === 'empreiteira');
+  if (!s) { app.innerHTML = `<div class="card empty">O cadastro de assinatura é feito com o código da empreiteira.</div>`; return }
+  const volta = sessionStorage.getItem('fisc.voltarDoc');
+  app.innerHTML = `<div class="fhead"><div class="who"><div><b>Assinatura da ${esc(s.empresa)}</b><div class="small muted">Usada para assinar BMD, FF e vistoria no app</div></div><a class="btn sm ghost" href="#${volta ? 'doc-' + volta : 'campo'}" style="text-decoration:none">← Voltar</a></div></div>
+   <div class="flist"><div class="fcard" id="alst"><b>Assinaturas cadastradas</b><div class="small muted" style="margin-top:6px">Carregando…</div></div>
+   <div class="fcard"><b>Cadastrar assinatura do responsável</b><div class="small muted">Dono, sócio ou supervisor da empresa. Faça uma vez; depois é só escolher o lugar no documento e digitar o PIN.</div>
+    <label class="f">Nome completo</label><input class="i" id="anm" value="${esc(S.nome || '')}" autocomplete="name">
+    <label class="f">Cargo</label><input class="i" id="acg" placeholder="Ex.: Proprietário, Supervisor de obras">
+    <label class="f">Assinatura <span class="muted">(desenhe com o dedo)</span></label><canvas id="apad" class="sigpad"></canvas>
+    <div style="display:flex;justify-content:flex-end"><button class="btn sm ghost" id="alimpa">Limpar</button></div>
+    <div class="row2"><div><label class="f">PIN (6 números)</label><input class="i" id="apin" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></div><div><label class="f">Repita o PIN</label><input class="i" id="apin2" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></div></div>
+    <label style="display:flex;gap:10px;align-items:flex-start;margin-top:14px;font-size:12.5px;line-height:1.4"><input type="checkbox" id="atermo" style="width:22px;height:22px;flex:none;margin-top:1px"><span>${esc(TERMO_ASS)}</span></label>
+    <button class="btn pri" id="asalva" style="width:100%;margin-top:14px;padding:13px">Salvar assinatura</button></div></div>`;
+  const pad = padAssinatura($('#apad'));
+  $('#alimpa').onclick = () => pad.limpar();
+  const lista = async () => {
+    let L = []; try { L = (await api(s, 'assinantes', {})).assinantes || [] } catch (e) { $('#alst').innerHTML = `<b>Assinaturas cadastradas</b><div class="small muted">${esc(msgServidor(e))}</div>`; return }
+    $('#alst').innerHTML = `<b>Assinaturas cadastradas</b>` + (L.length ? L.map(a => `<div class="docrow" style="cursor:default"><img data-img="${esc(a.id)}" class="sigmini" alt=""><div style="flex:1;min-width:0"><b>${esc(a.nome)}</b><div class="small muted">${esc(a.cargo || '')} · desde ${dtBR(a.criadoEm)}${a.bloqueado ? ' · <b style="color:var(--bad)">bloqueada (PIN)</b>' : ''}</div></div><button class="btn sm ghost" data-rv="${esc(a.id)}">Excluir</button></div>`).join('') : `<div class="small muted" style="margin-top:6px">Nenhuma ainda. Cadastre abaixo para poder assinar os documentos.</div>`);
+    $$('[data-img]', $('#alst')).forEach(async im => { try { im.src = await imgAss(s, im.dataset.img) } catch (e) { } });
+    $$('[data-rv]', $('#alst')).forEach(b => b.onclick = async () => { if (!b.dataset.conf) { b.dataset.conf = 1; b.textContent = 'Confirmar'; return } b.disabled = true; try { await api(s, 'revogarAssinante', { id: b.dataset.rv }); toast('Assinatura excluída'); sincronizar(); lista() } catch (e) { toast(msgServidor(e), 1); b.disabled = false } });
+  };
+  lista();
+  $('#asalva').onclick = async e => {
+    const nome = $('#anm').value.trim(), pin = $('#apin').value;
+    if (nome.length < 5) return toast('Informe o nome completo', 1);
+    if (pad.vazio()) return toast('Desenhe a assinatura', 1);
+    if (!/^\d{6}$/.test(pin)) return toast('O PIN deve ter 6 números', 1);
+    if (pin !== $('#apin2').value) return toast('Os PINs não conferem', 1);
+    if (/^(\d)\1{5}$/.test(pin) || '0123456789'.includes(pin) || '9876543210'.includes(pin)) return toast('Escolha um PIN menos óbvio', 1);
+    if (!$('#atermo').checked) return toast('Leia e aceite o termo', 1);
+    const img = pad.png(); if (!img) return toast('Desenhe a assinatura', 1);
+    const b = e.currentTarget; b.disabled = true; b.textContent = 'Salvando…';
+    try {
+      await api(s, 'cadastrarAssinante', { nome, cargo: $('#acg').value.trim(), pin, img, aceite: true });
+      S.nome = S.nome || nome; toast('Assinatura cadastrada'); await sincronizar();
+      if (volta) { sessionStorage.removeItem('fisc.voltarDoc'); go('doc-' + volta) } else vAssinatura(app);
+    } catch (err) { toast(msgServidor(err), 1); b.disabled = false; b.textContent = 'Salvar assinatura' }
+  };
+}
+/* ---------- assinar: escolher o lugar + PIN ---------- */
+async function posicionarAssinatura(d, s, bytes) {
+  const bar = $('#dbar'); bar.innerHTML = `<div class="dsign"><span class="small muted">Carregando assinatura…</span></div>`;
+  let L = []; try { L = ((await api(s, 'assinantes', {})).assinantes || []).filter(a => !a.bloqueado) } catch (e) { toast(msgServidor(e), 1); vDoc($('#app')); return }
+  if (!L.length) { sessionStorage.setItem('fisc.voltarDoc', d.id); toast('Primeiro cadastre a assinatura do responsável'); go('assinatura'); return }
+  let A = L[0]; let src = await imgAss(s, A.id);
+  const pags = $$('#dpages .pgw'); if (!pags.length) { toast('Aguarde o documento carregar', 1); vDoc($('#app')); return }
+  const POS = { i: pags.length - 1, fx: .72, fy: .86, fw: .26, ar: 3 };
+  const ov = document.createElement('img'); ov.className = 'sigov'; ov.src = src;
+  const desenhar = () => { const wr = pags[POS.i]; wr.appendChild(ov); ov.style.left = (POS.fx - POS.fw / 2) * 100 + '%'; ov.style.top = POS.fy * 100 + '%'; ov.style.width = POS.fw * 100 + '%'; ov.style.transform = 'translateY(-50%)' };
+  ov.onload = () => { POS.ar = ov.naturalWidth / ov.naturalHeight || 3 };
+  desenhar(); pags[POS.i].scrollIntoView({ block: 'center', behavior: 'smooth' });
+  const marcar = e => { const wr = e.currentTarget; const r = wr.getBoundingClientRect(); POS.i = +wr.dataset.i; POS.fx = (e.clientX - r.left) / r.width; POS.fy = (e.clientY - r.top) / r.height; desenhar() };
+  pags.forEach(w => { w.classList.add('pos'); w.onclick = marcar });
+  bar.innerHTML = `<div class="dsign" style="flex-wrap:wrap"><div class="small" style="width:100%"><b>Toque no documento onde vai a assinatura</b> (normalmente no campo da empreiteira).</div>
+    ${L.length > 1 ? `<select class="i" id="psig" style="flex:1;min-width:0">${L.map(a => `<option value="${esc(a.id)}">${esc(a.nome)}</option>`).join('')}</select>` : `<span class="small" style="flex:1">${esc(A.nome)}</span>`}
+    <button class="btn sm ghost" id="pmen" title="Diminuir">A−</button><button class="btn sm ghost" id="pmai" title="Aumentar">A+</button><button class="btn sm ghost" id="pcan">Cancelar</button><button class="btn pri" id="pok">Continuar</button></div>`;
+  $('#psig') && ($('#psig').onchange = async e => { A = L.find(a => a.id === e.target.value); ov.src = src = await imgAss(s, A.id) });
+  $('#pmen').onclick = () => { POS.fw = Math.max(.1, POS.fw - .04); desenhar() };
+  $('#pmai').onclick = () => { POS.fw = Math.min(.6, POS.fw + .04); desenhar() };
+  $('#pcan').onclick = () => { ov.remove(); pags.forEach(w => { w.classList.remove('pos'); w.onclick = null }); vDoc($('#app')) };
+  $('#pok').onclick = () => confirmarAssinatura(d, s, bytes, A, src, POS);
+}
+function confirmarAssinatura(d, s, bytes, A, src, POS) {
   openLayer(`<div class="ov" id="asov" style="align-items:flex-end;padding:0"><div class="sheet" style="width:100%"><div class="grab"></div>
-    <div style="display:flex;justify-content:space-between;align-items:center"><h4>Assinar ${esc(d.tipo)} · ${esc(d.projeto)}</h4><button class="btn sm ghost" id="asx">Fechar</button></div>
-    <label class="f">Nome completo de quem assina</label><input class="i" id="asn" value="${esc(S.nome || '')}" autocomplete="name">
-    <label class="f">Empresa</label><input class="i" value="${esc(s.empresa)}" disabled>
-    <label style="display:flex;gap:10px;align-items:flex-start;margin-top:14px;font-size:13.5px"><input type="checkbox" id="asck" style="width:22px;height:22px;flex:none;margin-top:1px"><span>Li o documento e concordo em assiná-lo eletronicamente em nome da ${esc(s.empresa)}.</span></label>
+    <div style="display:flex;justify-content:space-between;align-items:center"><h4>Assinar ${esc(d.tipo)} · ${esc(d.projeto)}</h4><button class="btn sm ghost" id="asx">Voltar</button></div>
+    <div style="display:flex;gap:12px;align-items:center;background:#f4f6f9;border-radius:10px;padding:10px;margin-top:6px"><img src="${src}" class="sigmini" style="width:120px;height:48px"><div><b>${esc(A.nome)}</b><div class="small muted">${esc(A.cargo || '')} · ${esc(s.empresa)}</div></div></div>
+    <label class="f">PIN da assinatura</label><input class="i" id="aspin" type="password" inputmode="numeric" maxlength="6" autocomplete="off" style="font-size:20px;letter-spacing:6px">
+    <label style="display:flex;gap:10px;align-items:flex-start;margin-top:14px;font-size:13.5px"><input type="checkbox" id="asck" style="width:22px;height:22px;flex:none;margin-top:1px"><span>Li o documento e o assino em nome da ${esc(s.empresa)}.</span></label>
     <button class="btn pri" id="asok" style="width:100%;margin-top:16px;padding:14px;font-size:15px" disabled>Assinar agora</button>
-    <div class="small muted" style="margin-top:8px">A assinatura registra seu nome, a data e hora, o código de acesso da empresa e a impressão digital (SHA-256) do documento. O PDF assinado ganha um carimbo em cada página e uma folha de assinatura no final.</div></div></div>`);
-  const val = () => $('#asok').disabled = !($('#asn').value.trim().length >= 5 && $('#asck').checked);
-  $('#asn').oninput = val; $('#asck').onchange = val;
-  $('#asx').onclick = closeLayer; $('#asov').onclick = e => { if (e.target.id === 'asov') closeLayer() };
+    <div class="small muted" style="margin-top:8px">O PDF assinado recebe a sua assinatura no lugar escolhido, um carimbo em cada página e uma folha de assinatura com data e hora, ID e a impressão digital (SHA-256) do documento.</div></div></div>`);
+  const val = () => $('#asok').disabled = !(/^\d{6}$/.test($('#aspin').value) && $('#asck').checked);
+  $('#aspin').oninput = val; $('#asck').onchange = val; setTimeout(() => $('#aspin') && $('#aspin').focus(), 200);
+  $('#asx').onclick = closeLayer;
   $('#asok').onclick = async e => {
     const b = e.currentTarget; b.disabled = true; b.textContent = 'Assinando…';
-    const nome = $('#asn').value.trim(); S.nome = S.nome || nome;
     try {
       const hashOriginal = await sha256Hex(bytes);
       if (hashOriginal !== d.hash) throw new Error('o documento recebido não confere com o original');
       const quando = new Date();
-      const assinado = await carimbarPdf(bytes, { nome, empresa: s.empresa, quando, id: d.id, tipo: d.tipo, projeto: d.projeto, pep: d.pep, arquivo: d.nome, hash: hashOriginal, chave: String(s.chave).slice(-4), div: s.div });
+      const assinado = await carimbarPdf(bytes, { nome: A.nome, cargo: A.cargo, empresa: s.empresa, quando, id: d.id, tipo: d.tipo, projeto: d.projeto, pep: d.pep, arquivo: d.nome, hash: hashOriginal, chave: String(s.chave).slice(-4), div: s.div, sig: Object.assign({ png: b64Bytes(src.split(',')[1]) }, POS) });
       b.textContent = 'Enviando…';
-      await api(s, 'assinarDocumento', { id: d.id, nome, hashOriginal, assinadoEm: quando.toISOString(), dispositivo: navigator.userAgent, pdf: { b64: await blobB64(new Blob([assinado])) } });
+      await api(s, 'assinarDocumento', { id: d.id, assinante: A.id, pin: $('#aspin').value, hashOriginal, assinadoEm: quando.toISOString(), dispositivo: navigator.userAgent, pdf: { b64: await blobB64(new Blob([assinado])) } });
       closeLayer(); toast('Documento assinado');
+      $$('#dpages .pgw').forEach(w => { w.classList.remove('pos'); w.onclick = null });
       $('#dbar').innerHTML = `<div class="dsign"><button class="btn pri" id="dbx" style="flex:1;padding:12px">⬇️ Baixar PDF assinado</button></div>`;
       $('#dbx').onclick = () => baixarBytes(assinado, 'ASSINADO_' + d.nome);
       sincronizar();
-    } catch (err) { console.error(err); b.disabled = false; b.textContent = 'Assinar agora'; toast(err.rede ? 'Sem conexão: a assinatura precisa de internet.' : 'Não foi possível assinar: ' + (err.message || err), 1) }
+    } catch (err) { console.error(err); b.disabled = false; b.textContent = 'Assinar agora'; $('#aspin').value = ''; val(); toast(err.rede ? 'Sem conexão: a assinatura precisa de internet.' : 'Não foi possível assinar: ' + (err.message || err), 1) }
   };
 }
-/** Carimba cada página e acrescenta a folha de assinatura (pdf-lib, no próprio aparelho). */
+/** Carimba cada página, coloca a assinatura no lugar escolhido e acrescenta a folha de assinatura (pdf-lib, no próprio aparelho). */
 async function carimbarPdf(bytes, a) {
   const { PDFDocument, StandardFonts, rgb, degrees } = await pdfLibA();
   const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
@@ -1521,23 +1619,42 @@ async function carimbarPdf(bytes, a) {
   const ok = t => String(t || '').normalize('NFC').replace(/[^\x20-\x7E -ÿ]/g, '?');
   const pad = n => String(n).padStart(2, '0'); const q = a.quando;
   const dataTx = `${pad(q.getDate())}/${pad(q.getMonth() + 1)}/${q.getFullYear()} ${pad(q.getHours())}:${pad(q.getMinutes())}:${pad(q.getSeconds())}`;
-  const carimbo = ok(`Assinado eletronicamente por ${a.nome} (${a.empresa}) em ${dataTx} - ID ${a.id} - SHA-256 ${a.hash.slice(0, 16)}...`);
+  const quem = a.nome + (a.cargo ? ', ' + a.cargo : '');
+  const carimbo = ok(`Assinado eletronicamente por ${quem} (${a.empresa}) em ${dataTx} - ID ${a.id} - SHA-256 ${a.hash.slice(0, 16)}...`);
   const cor = rgb(0.05, 0.25, 0.55);
-  for (const pg of doc.getPages()) {
+  const pages = doc.getPages();
+  for (const pg of pages) {
     const { width: w, height: h } = pg.getSize(); const ang = ((pg.getRotation().angle % 360) + 360) % 360;
     const comp = ang === 90 || ang === 270 ? h : w; let sz = 6.5; while (sz > 4 && f.widthOfTextAtSize(carimbo, sz) > comp - 24) sz -= .25;
     const pos = ang === 90 ? { x: w - 7, y: 12, r: 90 } : ang === 180 ? { x: w - 12, y: h - 7, r: 180 } : ang === 270 ? { x: 7, y: h - 12, r: 270 } : { x: 12, y: 7, r: 0 };
     pg.drawText(carimbo, { x: pos.x, y: pos.y, size: sz, font: f, color: cor, rotate: degrees(pos.r) });
+  }
+  let img = null;
+  if (a.sig && pages[a.sig.i]) {   // assinatura desenhada no lugar que a pessoa tocou
+    img = await doc.embedPng(a.sig.png);
+    const pg = pages[a.sig.i]; const cb = pg.getCropBox(); const w = cb.width, h = cb.height;
+    const ang = ((pg.getRotation().angle % 360) + 360) % 360; const rot = ang === 90 || ang === 270;
+    const DW = rot ? h : w, DH = rot ? w : h;
+    // (u, v) = ponto na página como aparece na tela (origem no canto de cima, à esquerda) → coordenadas do PDF
+    const M = (u, v) => ang === 90 ? { x: v, y: u } : ang === 180 ? { x: w - u, y: v } : ang === 270 ? { x: w - v, y: h - u } : { x: u, y: h - v };
+    const sw = a.sig.fw * DW, sh = sw * img.height / img.width;
+    const u0 = a.sig.fx * DW - sw / 2, vC = a.sig.fy * DH;
+    const p0 = M(u0, vC + sh / 2);
+    pg.drawImage(img, { x: cb.x + p0.x, y: cb.y + p0.y, width: sw, height: sh, rotate: degrees(ang) });
+    const tsz = Math.max(4.5, Math.min(7, sw / 32)); const lin = ok(`${quem} - ${dataTx}`);
+    const p1 = M(u0, vC + sh / 2 + tsz + 1.5);
+    pg.drawText(lin, { x: cb.x + p1.x, y: cb.y + p1.y, size: tsz, font: f, color: cor, rotate: degrees(ang) });
   }
   const pg = doc.addPage([595.28, 841.89]); let y = 762;
   const tx = (t, o = {}) => { pg.drawText(ok(t), { x: o.x || 56, y, size: o.size || 10.5, font: o.b ? fb : f, color: o.c || rgb(0.1, 0.12, 0.16) }); y -= o.gap ?? 17 };
   pg.drawRectangle({ x: 40, y: 40, width: 515.28, height: 761.89, borderColor: cor, borderWidth: 1.2 });
   tx('FOLHA DE ASSINATURA ELETRÔNICA', { b: true, size: 16, c: cor, gap: 26 });
   tx(`Fiscalização de Obras · Copel · ${a.div || ''}`, { size: 10, gap: 30 });
-  const campos = [['Documento', `${a.tipo} - ${a.arquivo}`], ['Projeto', a.projeto], ['PEP', a.pep || '-'], ['Assinado por', a.nome], ['Empresa', a.empresa], ['Data e hora', dataTx + ' (horário do aparelho)'], ['ID da assinatura', a.id], ['Código de acesso', 'final ' + a.chave]];
+  const campos = [['Documento', `${a.tipo} - ${a.arquivo}`], ['Projeto', a.projeto], ['PEP', a.pep || '-'], ['Assinado por', a.nome], ['Cargo', a.cargo || '-'], ['Empresa', a.empresa], ['Data e hora', dataTx + ' (horário do aparelho)'], ['ID da assinatura', a.id], ['Código de acesso', 'final ' + a.chave], ['Confirmação', 'PIN pessoal do signatário']];
   for (const [k, v] of campos) { tx(k, { b: true, gap: 0 }); tx(v, { x: 190 }) }
+  if (img) { const sw = 170, sh = sw * img.height / img.width; y -= 4; pg.drawImage(img, { x: 190, y: y - sh + 10, width: sw, height: sh }); tx('Assinatura', { b: true, gap: sh + 4 }) }
   y -= 8; tx('SHA-256 do documento original', { b: true, gap: 15 }); tx(a.hash.slice(0, 32), { x: 56, size: 10 }); tx(a.hash.slice(32), { x: 56, size: 10, gap: 28 });
-  const aviso = 'Assinatura eletrônica realizada no app Fiscalização de Obras mediante código de acesso da empresa e aceite expresso do signatário. As páginas anteriores reproduzem o documento original enviado pela Copel; a integridade dele pode ser conferida pelo SHA-256 acima. O registro da assinatura (nome, data e hora, código e dispositivo) fica guardado no sistema da Copel.';
+  const aviso = 'Assinatura eletrônica realizada no app Fiscalização de Obras com a assinatura cadastrada pelo signatário, confirmada pelo PIN pessoal dele e pelo código de acesso da empresa, que aceitou o termo de reconhecimento da validade desta forma de assinatura (MP 2.200-2/2001, art. 10, § 2º). As páginas anteriores reproduzem o documento original enviado pela Copel; a integridade dele pode ser conferida pelo SHA-256 acima. O registro da assinatura fica guardado no sistema da Copel.';
   let linha = ''; for (const w of ok(aviso).split(' ')) { if (f.widthOfTextAtSize(linha + ' ' + w, 9.5) > 480) { tx(linha, { size: 9.5, gap: 13 }); linha = w } else linha = linha ? linha + ' ' + w : w } if (linha) tx(linha, { size: 9.5 });
   doc.setModificationDate(q); doc.setProducer('Fiscalização de Obras · Copel');
   return await doc.save();

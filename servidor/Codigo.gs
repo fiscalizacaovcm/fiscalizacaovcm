@@ -7,7 +7,7 @@
  * Para atualizar o código depois: Implantar > Gerenciar implantações > ✏️ > Versão: Nova versão > Implantar.
  * NUNCA use "Nova implantação" de novo, porque o endereço muda e o app perde a conexão.
  */
-const VERSAO_SERVIDOR = '1.5';
+const VERSAO_SERVIDOR = '1.6';
 
 const COLS_OBRAS = ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us',
   'empenhoEm', 'prazo', 'status', 'lat', 'lon', 'locOrigem', 'plantaId', 'plantaW', 'plantaH', 'pdfId', 'pdfNome',
@@ -17,6 +17,8 @@ const COLS_REGS = ['id', 'obra', 'poste', 'tipo', 'alt', 'obs', 'fotoId', 'lat',
 const COLS_DOCS = ['id', 'obra', 'projeto', 'pep', 'empreiteira', 'tipo', 'nome', 'pdfId', 'hash', 'enviadoPor', 'enviadoEm', 'status',
   'assinadoPor', 'assinadoEm', 'assinaturaChave', 'dispositivo', 'pdfAssinadoId', 'hashAssinado', 'alteradoEm'];
 const TIPOS_DOC = ['BMD', 'FF', 'Vistoria', 'Outro'];
+const COLS_ASS = ['id', 'empresa', 'nome', 'cargo', 'imgId', 'pinHash', 'sal', 'criadoEm', 'criadoPor', 'ativo', 'tentativas', 'ultimoUso', 'aceiteTermo'];
+const TERMO_VERSAO = 'termo-v1';
 const ABAS = {
   obras: COLS_OBRAS,
   registros: COLS_REGS,
@@ -24,7 +26,8 @@ const ABAS = {
   config: ['item', 'valor'],
   obras_historico: COLS_OBRAS,
   registros_historico: COLS_REGS,
-  documentos: COLS_DOCS
+  documentos: COLS_DOCS,
+  assinantes: COLS_ASS
 };
 const COL_DATA = ['empenhoEm', 'prazo', 'dataExec'];
 const COL_NUM = ['us', 'lat', 'lon', 'plantaW', 'plantaH', 'precisao', 'x', 'y', 'folha'];
@@ -177,6 +180,10 @@ function doPost(e) {
       case 'docPdf': return json(docPdf(p, req));
       case 'assinarDocumento': return json(assinarDocumento(p, req));
       case 'removerDocumento': return json(removerDocumento(p, req));
+      case 'assinantes': return json(assinantes(p, req));
+      case 'cadastrarAssinante': return json(cadastrarAssinante(p, req));
+      case 'imgAssinante': return json(imgAssinante(p, req));
+      case 'revogarAssinante': return json(revogarAssinante(p, req));
       default: return json({ ok: false, erro: 'ação desconhecida' });
     }
   } catch (err) {
@@ -675,7 +682,8 @@ function docsVisiveis(p) {
 }
 function resumoDocs(p) {
   const L = docsVisiveis(p);
-  return { pendentes: L.filter(function (d) { return d.status !== 'assinado'; }).length, total: L.length };
+  const A = ler('assinantes').filter(function (a) { return a.ativo === 'SIM' && (p.papel !== 'empreiteira' || norm(a.empresa) === norm(p.empresa)); });
+  return { pendentes: L.filter(function (d) { return d.status !== 'assinado'; }).length, total: L.length, assinantes: A.length };
 }
 function docPublico(d) {
   const o = {};
@@ -723,15 +731,17 @@ function assinarDocumento(p, req) {
   const d = docsVisiveis(p).filter(function (x) { return x.id === req.id; })[0];
   if (!d) return { ok: false, erro: 'documento não encontrado' };
   if (d.status === 'assinado') return { ok: true, repetido: true, documento: docPublico(d) };
-  if (!req.nome || !String(req.nome).trim()) return { ok: false, erro: 'informe o nome de quem assina' };
   if (!req.pdf || !req.pdf.b64) return { ok: false, erro: 'PDF assinado não enviado' };
+  const chk = conferirPin(p, req.assinante, req.pin);
+  if (!chk.ok) return chk;
+  const as = chk.assinante;
   // confere que o PDF assinado partiu do mesmo original que a Copel enviou
   const hashOrig = sha256(DriveApp.getFileById(d.pdfId).getBlob().getBytes());
   if (hashOrig !== d.hash || req.hashOriginal !== d.hash) return { ok: false, erro: 'o documento original foi alterado; peça um novo envio' };
   const bytes = Utilities.base64Decode(req.pdf.b64);
   const arq = pastaDocs().createFile(Utilities.newBlob(bytes, 'application/pdf', 'ASSINADO_' + d.projeto + '_' + d.tipo + '_' + d.id + '.pdf'));
   const campos = {
-    status: 'assinado', assinadoPor: String(req.nome).trim() + ' · ' + p.empresa, assinadoEm: req.assinadoEm || agoraIso(), assinaturaChave: p.chave,
+    status: 'assinado', assinadoPor: as.nome + (as.cargo ? ' (' + as.cargo + ')' : '') + ' · ' + p.empresa, assinadoEm: req.assinadoEm || agoraIso(), assinaturaChave: p.chave,
     dispositivo: String(req.dispositivo || '').slice(0, 200), pdfAssinadoId: arq.getId(), hashAssinado: sha256(bytes), alteradoEm: agoraIso()
   };
   let ok = false;
@@ -752,4 +762,57 @@ function removerDocumento(p, req) {
   });
   try { DriveApp.getFileById(d.pdfId).setTrashed(true); } catch (e) { }
   return { ok: ok };
+}
+
+/* ---------- assinantes da empreiteira (assinatura desenhada + PIN) ---------- */
+function hashPin(pin, sal) { return sha256(Utilities.newBlob(String(sal) + ':' + String(pin)).getBytes()); }
+function assPublico(a) { return { id: a.id, empresa: a.empresa, nome: a.nome, cargo: a.cargo, criadoEm: a.criadoEm, ativo: a.ativo, ultimoUso: a.ultimoUso, bloqueado: Number(a.tentativas || 0) >= 5 }; }
+function assinantes(p, req) {
+  const L = ler('assinantes').filter(function (a) { return a.ativo === 'SIM' && (p.papel !== 'empreiteira' || norm(a.empresa) === norm(p.empresa)); });
+  return { ok: true, assinantes: L.map(assPublico) };
+}
+function cadastrarAssinante(p, req) {
+  if (p.papel !== 'empreiteira') return { ok: false, erro: 'o cadastro de assinatura é feito pela empreiteira' };
+  const nome = String(req.nome || '').trim(), pin = String(req.pin || '');
+  if (nome.length < 5) return { ok: false, erro: 'informe o nome completo' };
+  if (!/^\d{6}$/.test(pin)) return { ok: false, erro: 'o PIN deve ter 6 números' };
+  if (!req.img) return { ok: false, erro: 'desenhe a assinatura' };
+  if (!req.aceite) return { ok: false, erro: 'é preciso aceitar o termo' };
+  const id = 'A' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36);
+  const arq = pastaDocs().createFile(Utilities.newBlob(Utilities.base64Decode(req.img), 'image/png', 'assinatura_' + norm(p.empresa).replace(/\s+/g, '_') + '_' + id + '.png'));
+  const sal = Utilities.getUuid();
+  const agora = agoraIso();
+  const linha = { id: id, empresa: p.empresa, nome: nome, cargo: String(req.cargo || '').trim(), imgId: arq.getId(), pinHash: hashPin(pin, sal), sal: sal,
+    criadoEm: agora, criadoPor: 'código final ' + String(p.chave).slice(-4), ativo: 'SIM', tentativas: '0', ultimoUso: '', aceiteTermo: TERMO_VERSAO + ' · ' + agora };
+  comTrava(function () { anexar('assinantes', linha); marcarAlteracao(); });
+  return { ok: true, assinante: assPublico(linha) };
+}
+function acharAssinante(p, id) {
+  return ler('assinantes').filter(function (a) { return a.id === id && a.ativo === 'SIM' && (p.papel !== 'empreiteira' || norm(a.empresa) === norm(p.empresa)); })[0] || null;
+}
+function imgAssinante(p, req) {
+  const a = acharAssinante(p, req.id);
+  if (!a) return { ok: false, erro: 'assinatura não encontrada' };
+  return { ok: true, b64: Utilities.base64Encode(DriveApp.getFileById(a.imgId).getBlob().getBytes()) };
+}
+function revogarAssinante(p, req) {
+  if (p.papel === 'fiscal') return { ok: false, erro: 'sem permissão' };
+  const a = acharAssinante(p, req.id);
+  if (!a) return { ok: false, erro: 'assinatura não encontrada' };
+  let ok = false;
+  comTrava(function () { ok = atualizarLinha('assinantes', a.id, { ativo: 'NÃO' }); marcarAlteracao(); });
+  return { ok: ok };
+}
+/** Confere o PIN; 5 erros seguidos bloqueiam (a empresa cadastra a assinatura de novo ou o gestor revoga). */
+function conferirPin(p, id, pin) {
+  const a = acharAssinante(p, id);
+  if (!a) return { ok: false, erro: 'assinatura não encontrada: cadastre a assinatura do responsável' };
+  const t = Number(a.tentativas || 0);
+  if (t >= 5) return { ok: false, erro: 'assinatura bloqueada por 5 PINs errados; cadastre a assinatura de novo' };
+  if (hashPin(pin, a.sal) !== a.pinHash) {
+    comTrava(function () { atualizarLinha('assinantes', a.id, { tentativas: String(t + 1) }); });
+    return { ok: false, erro: 'PIN incorreto (' + (4 - t) + ' tentativa(s) restante(s))' };
+  }
+  comTrava(function () { atualizarLinha('assinantes', a.id, { tentativas: '0', ultimoUso: agoraIso() }); });
+  return { ok: true, assinante: a };
 }
