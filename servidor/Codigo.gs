@@ -7,7 +7,7 @@
  * Para atualizar o código depois: Implantar > Gerenciar implantações > ✏️ > Versão: Nova versão > Implantar.
  * NUNCA use "Nova implantação" de novo, porque o endereço muda e o app perde a conexão.
  */
-const VERSAO_SERVIDOR = '1.10';
+const VERSAO_SERVIDOR = '1.11';
 
 const COLS_OBRAS = ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us',
   'empenhoEm', 'prazo', 'status', 'lat', 'lon', 'locOrigem', 'plantaId', 'plantaW', 'plantaH', 'pdfId', 'pdfNome',
@@ -15,8 +15,8 @@ const COLS_OBRAS = ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'mu
 const COLS_REGS = ['id', 'obra', 'poste', 'tipo', 'alt', 'obs', 'fotoId', 'lat', 'lon', 'gpsOrigem', 'precisao', 'dataExec',
   'marcadoEm', 'recebidoEm', 'nome', 'empresa', 'x', 'y', 'invalido', 'invalidadoPor', 'alteradoEm', 'folha'];
 const COLS_DOCS = ['id', 'obra', 'projeto', 'pep', 'empreiteira', 'tipo', 'nome', 'pdfId', 'hash', 'enviadoPor', 'enviadoEm', 'status',
-  'assinadoPor', 'assinadoEm', 'assinaturaChave', 'dispositivo', 'pdfAssinadoId', 'hashAssinado', 'alteradoEm', 'parcial', 'medicao'];
-const TIPOS_DOC = ['BMD parcial', 'BMD final', 'BMD', 'FF', 'Vistoria', 'Outro'];
+  'assinadoPor', 'assinadoEm', 'assinaturaChave', 'dispositivo', 'pdfAssinadoId', 'hashAssinado', 'alteradoEm', 'parcial', 'medicao', 'aes'];
+const TIPOS_DOC = ['AES', 'BMD parcial', 'BMD final', 'BMD', 'FF', 'Vistoria', 'Outro'];
 const COLS_ASS = ['id', 'empresa', 'nome', 'cargo', 'imgId', 'pinHash', 'sal', 'criadoEm', 'criadoPor', 'ativo', 'tentativas', 'ultimoUso', 'aceiteTermo'];
 const TERMO_VERSAO = 'termo-v1';
 const COLS_PDE = ['id', 'obra', 'projeto', 'pep', 'municipio', 'empreiteira', 'tipo', 'fiscal', 'postes', 'folhas', 'operacional', 'data', 'horaIni', 'horaFim',
@@ -715,7 +715,10 @@ function docPublico(d) {
 }
 function documentos(p, req) {
   let L = docsVisiveis(p);
-  if (req.obra) L = L.filter(function (d) { return d.obra === req.obra; });
+  if (req.obra) {
+    const ob = acharObraQualquer(req.obra); const aesObra = ob && ob.aes ? String(ob.aes) : '';
+    L = L.filter(function (d) { return d.obra === req.obra || (d.tipo === 'AES' && aesObra && String(d.aes) === aesObra); });
+  }
   L.sort(function (a, b) { return String(b.enviadoEm).localeCompare(String(a.enviadoEm)); });
   return { ok: true, documentos: L.map(docPublico) };
 }
@@ -856,13 +859,14 @@ function registrarAes(p, req) {
   const a = req.aes || {};
   if (!a.numero || !a.itens || !a.itens.length) return { ok: false, erro: 'AES sem número ou sem itens' };
   if (!a.empreiteira) return { ok: false, erro: 'informe a empreiteira (como está na aba chaves)' };
-  let pdfId = '';
+  let pdfId = '', bytesAes = null;
   if (req.pdf && req.pdf.b64) {
-    pdfId = DriveApp.getFolderById(lerConfig().pastaPdfs).createFile(Utilities.newBlob(Utilities.base64Decode(req.pdf.b64), 'application/pdf', 'AES_' + a.numero + '.pdf')).getId();
+    bytesAes = Utilities.base64Decode(req.pdf.b64);
+    pdfId = DriveApp.getFolderById(lerConfig().pastaPdfs).createFile(Utilities.newBlob(bytesAes, 'application/pdf', 'AES_' + a.numero + '.pdf')).getId();
   }
   const agora = agoraIso();
   const obras = ler('obras');
-  let novos = 0, atualizados = 0, vinculados = 0;
+  let novos = 0, atualizados = 0, vinculados = 0, docAes = false;
   comTrava(function () {
     a.itens.forEach(function (it) {
       const id = 'AES' + a.numero + '-' + it.item;
@@ -889,9 +893,20 @@ function registrarAes(p, req) {
         }
       }
     });
+    // a empreiteira também assina a AES (um documento por AES; reenviar não duplica)
+    if (bytesAes && req.assinar !== false) {
+      const ja = ler('documentos').filter(function (d) { return d.tipo === 'AES' && String(d.aes) === String(a.numero) && norm(d.empreiteira) === norm(a.empreiteira); })[0];
+      if (!ja) {
+        const idd = 'D' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36);
+        const arq = pastaDocs().createFile(Utilities.newBlob(bytesAes, 'application/pdf', 'AES_' + a.numero + '_' + idd + '.pdf'));
+        anexar('documentos', { id: idd, obra: '', projeto: a.itens.map(function (it) { return it.projeto; }).join(', '), pep: '', empreiteira: a.empreiteira, tipo: 'AES',
+          nome: 'AES_' + a.numero + '.pdf', pdfId: arq.getId(), hash: sha256(bytesAes), enviadoPor: p.responsavel || p.papel, enviadoEm: agora, status: 'aguardando', alteradoEm: agora, parcial: '', medicao: '', aes: a.numero });
+        docAes = true;
+      }
+    }
     marcarAlteracao();
   });
-  return { ok: true, novos: novos, atualizados: atualizados, vinculados: vinculados };
+  return { ok: true, novos: novos, atualizados: atualizados, vinculados: vinculados, docAes: docAes };
 }
 function removerAes(p, req) {
   if (p.papel !== 'gestor') return { ok: false, erro: 'sem permissão' };

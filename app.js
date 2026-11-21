@@ -1,7 +1,7 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.12.0';
+const VERSAO_APP = '1.13.0';
 const LIB = {
   pdf: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   pdfw: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
@@ -819,6 +819,7 @@ async function processarAes(file) {
     ${A.itens.map(it => `<tr><td>${esc(it.item)}</td><td><b>${esc(it.projeto)}</b></td><td>${esc(it.pep)}${it.pepOdd ? `<div class="small muted">${esc(it.pepOdd)}</div>` : ''}</td><td class="small">${esc(it.tipoObra)}</td><td>${it.prazo ? dBR(it.prazo) : '—'}</td><td style="text-align:right">${fmtUs(it.us)}</td><td style="text-align:right">${it.custo != null ? 'R$ ' + it.custo.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) : ''}</td></tr>`).join('')}
     </tbody>${A.totalUs != null ? `<tfoot><tr><td colspan="5"><b>Total</b></td><td style="text-align:right"><b>${fmtUs(A.totalUs)}</b></td><td style="text-align:right"><b>R$ ${(A.totalCusto || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</b></td></tr></tfoot>` : ''}</table></div>
     ${ja ? `<div class="note" style="margin-top:10px">Esta AES já foi registrada. Registrar de novo atualiza os itens (sem duplicar).</div>` : ''}
+    <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:13.5px"><input type="checkbox" id="aass" checked style="width:20px;height:20px"> Enviar a AES para a empreiteira assinar no app</label>
     <div class="note ok-note" style="margin-top:10px">Depois de registrar, suba os PDFs dos projetos: o app reconhece cada um pelo número e já preenche empreiteira, AES, PEP, US e prazo.</div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px"><button class="btn ghost" id="ax">Cancelar</button><button class="btn pri" id="aok">Registrar AES (${A.itens.length} projeto${A.itens.length > 1 ? 's' : ''})</button></div></div></div>`);
   $('#adiv') && ($('#adiv').onchange = e => { pref = e.target.value; $('#aempbox').innerHTML = empSel() });
@@ -827,8 +828,8 @@ async function processarAes(file) {
     const emp = $('#aemp').value; if (!emp) return toast('Escolha a empreiteira', 1);
     const b = e.currentTarget; b.disabled = true; b.textContent = 'Registrando…';
     try {
-      const j = await api(sessDe(pref), 'registrarAes', { aes: Object.assign({}, A, { empreiteira: emp }), pdf: file.size < 15e6 ? { b64: await blobB64(file) } : null });
-      closeLayer(); toast(`AES ${A.numero} registrada: ${j.novos} novo(s)${j.atualizados ? ', ' + j.atualizados + ' atualizado(s)' : ''}${j.vinculados ? ', ' + j.vinculados + ' ligado(s) a obras já empenhadas' : ''}`);
+      const j = await api(sessDe(pref), 'registrarAes', { aes: Object.assign({}, A, { empreiteira: emp }), assinar: $('#aass').checked, pdf: file.size < 15e6 ? { b64: await blobB64(file) } : null });
+      closeLayer(); toast(`AES ${A.numero} registrada: ${j.novos} novo(s)${j.atualizados ? ', ' + j.atualizados + ' atualizado(s)' : ''}${j.vinculados ? ', ' + j.vinculados + ' ligado(s) a obras já empenhadas' : ''}${j.docAes ? ' · enviada para a empreiteira assinar' : ''}`);
       await sincronizar(); if (S.view === 'nova') vNova($('#app'));
     } catch (err) { toast(msgServidor(err), 1); b.disabled = false; b.textContent = 'Registrar AES' }
   };
@@ -1131,7 +1132,7 @@ function vFlist(app) {
   const s0 = S.sess[0];
   app.innerHTML = `<div class="fhead"><div class="who"><div><b>${esc(S.nome)}</b><div class="small muted">${copel ? 'Copel · fiscalização' : esc(s0.empresa)} · ${esc(S.sess.map(s => s.div).join(', '))}</div></div><a class="btn sm ghost" href="#conta" style="text-decoration:none">Conta</a></div>
    ${S.fila.length ? `<div class="note" style="margin-top:10px">${S.fila.length} registro(s) aguardando sinal para enviar. <button class="btn sm" id="envf">Tentar agora</button></div>` : ''}
-   ${!copel && docsTotal() ? `<a class="fcard" href="#assinar" style="display:block;margin-top:10px;text-decoration:none;color:inherit;${docsPend() ? 'background:#fff7ed;border:1px solid #fed7aa' : ''}"><b>📄 ${docsPend() ? docsPend() + ' documento(s) aguardando sua assinatura' : 'Documentos assinados'}</b><div class="small muted">BMD, FF e vistoria enviados pela Copel${docsPend() ? ' · toque para assinar' : ' · toque para baixar'}</div></a>` : ''}
+   ${!copel && docsTotal() ? `<a class="fcard" href="#assinar" style="display:block;margin-top:10px;text-decoration:none;color:inherit;${docsPend() ? 'background:#fff7ed;border:1px solid #fed7aa' : ''}"><b>📄 ${docsPend() ? docsPend() + ' documento(s) aguardando sua assinatura' : 'Documentos assinados'}</b><div class="small muted">AES, BMD, FF e vistoria enviados pela Copel${docsPend() ? ' · toque para assinar' : ' · toque para baixar'}</div></a>` : ''}
    ${!copel && pdeResumo().tot ? `<a class="fcard" href="#pdes" style="display:block;margin-top:10px;text-decoration:none;color:inherit;${pdeResumo().dev ? 'background:#fee2e2;border:1px solid #fecaca' : ''}"><b>📋 PDE / PLV${pdeResumo().dev ? ` · ${pdeResumo().dev} devolvido(s) para corrigir` : ''}</b><div class="small muted">${pdeResumo().sol} aguardando o fiscal · toque para ver seus pedidos</div></a>` : ''}
    ${!copel && !assTotal() ? `<a class="fcard" href="#assinatura" style="display:block;margin-top:10px;text-decoration:none;color:inherit;background:#eff6ff;border:1px solid #bfdbfe"><b>✍️ Cadastre a assinatura da empresa</b><div class="small muted">O responsável (dono ou supervisor) desenha a assinatura e cria um PIN uma vez; depois assina BMD e FF com um toque.</div></a>` : ''}
    <div id="inst"></div></div>
@@ -1489,7 +1490,7 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.se
 
 /* ================= documentos para assinatura (BMD, FF, vistoria) ================= */
 const TIPOS_DOC = ['BMD parcial', 'BMD final', 'FF', 'Vistoria', 'Outro'];
-const nomeDoc = d => d.tipo + (d.parcial ? ' nº ' + d.parcial : '');
+const nomeDoc = d => d.tipo + (d.parcial ? ' nº ' + d.parcial : '') + (d.tipo === 'AES' && d.aes ? ' ' + d.aes : '');
 const medTx = d => d.medicao ? ` · ${d.medicao.qtd} poste(s) · ${fmtUs(d.medicao.us)} US${d.medicao.novos != null ? ` (+${d.medicao.novos} desde a anterior)` : ''}` : '';
 const docsPend = () => S.sess.reduce((n, s) => n + (((S.raw[s.pref] || {}).docs || {}).pendentes || 0), 0);
 const docsTotal = () => S.sess.reduce((n, s) => n + (((S.raw[s.pref] || {}).docs || {}).total || 0), 0);
@@ -1602,7 +1603,7 @@ async function cardDocsObra(o) {
 }
 /* Empreiteira: lista para assinar */
 async function vAssinar(app) {
-  app.innerHTML = `<div class="fhead"><div class="who"><div><b>Documentos para assinar</b><div class="small muted">BMD, FF e vistoria enviados pela Copel</div></div><a class="btn sm ghost" href="#campo" style="text-decoration:none">← Obras</a></div></div><div style="padding:0 14px"><a href="#assinatura" class="small">✍️ Assinatura cadastrada da empresa</a></div><div class="flist" id="alist"><div class="fcard empty">Carregando…</div></div>`;
+  app.innerHTML = `<div class="fhead"><div class="who"><div><b>Documentos para assinar</b><div class="small muted">AES, BMD, FF e vistoria enviados pela Copel</div></div><a class="btn sm ghost" href="#campo" style="text-decoration:none">← Obras</a></div></div><div style="padding:0 14px"><a href="#assinatura" class="small">✍️ Assinatura cadastrada da empresa</a></div><div class="flist" id="alist"><div class="fcard empty">Carregando…</div></div>`;
   const { L, erro } = await listarDocs();
   if (S.view !== 'assinar') return;
   L.sort((a, b) => (a.status === 'assinado') - (b.status === 'assinado') || String(b.enviadoEm).localeCompare(String(a.enviadoEm)));
@@ -1811,7 +1812,7 @@ async function carimbarPdf(bytes, a) {
 }
 
 /* ================= fluxo do processo (BPMN) ================= */
-const FLUXO = { src: './fluxo.svg?v=2', w: 4228, h: 718 };
+const FLUXO = { src: './fluxo.svg?v=3', w: 4228, h: 718 };
 function vFluxo(app) {
   const campo = S.mode === 'campo';
   app.innerHTML = `<div class="${campo ? 'fhead' : ''}" style="${campo ? '' : 'margin-bottom:12px'}"><div class="${campo ? 'who' : 'card'}">

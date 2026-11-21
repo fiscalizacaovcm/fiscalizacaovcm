@@ -25,6 +25,8 @@
       </lane>
       <lane id="L_emp" name="Empreiteira · equipe de campo">
         <flowNodeRef>t_exe</flowNodeRef>
+        <flowNodeRef>t_aesass</flowNodeRef>
+        <flowNodeRef>fim_aes</flowNodeRef>
         <flowNodeRef>t_cor</flowNodeRef>
         <flowNodeRef>t_ass</flowNodeRef>
         <flowNodeRef>t_bx</flowNodeRef>
@@ -547,6 +549,7 @@
       </extensionElements>
       <incoming>f1c</incoming>
       <outgoing>f1d</outgoing>
+      <outgoing>fa1</outgoing>
       <script />
     </scriptTask>
     <userTask id="t_pdf" name="Subir os PDFs dos projetos (vários de uma vez)">
@@ -881,6 +884,61 @@
       </extensionElements>
     </sequenceFlow>
     <sequenceFlow id="f17c" name="" sourceRef="t_hist" targetRef="t_ass">
+      <extensionElements>
+        <bizagi:BizagiExtensions xmlns:bizagi="http://www.bizagi.com/bpmn20">
+          <bizagi:BizagiProperties>
+            <bizagi:BizagiProperty name="bgColor" value="White" />
+            <bizagi:BizagiProperty name="borderColor" value="Black" />
+            <bizagi:BizagiProperty name="textColor" value="Black" />
+            <bizagi:BizagiProperty name="textBackgroundColor" value="Transparent" />
+            <bizagi:BizagiProperty name="textDirection" value="" />
+          </bizagi:BizagiProperties>
+        </bizagi:BizagiExtensions>
+      </extensionElements>
+    </sequenceFlow>
+    <userTask id="t_aesass" name="Assinar a AES no app (PIN)">
+      <extensionElements>
+        <bizagi:BizagiExtensions xmlns:bizagi="http://www.bizagi.com/bpmn20">
+          <bizagi:BizagiProperties>
+            <bizagi:BizagiProperty name="bgColor" value="#ECEFFF" />
+            <bizagi:BizagiProperty name="borderColor" value="#03689A" />
+            <bizagi:BizagiProperty name="textColor" value="Black" />
+            <bizagi:BizagiProperty name="textBackgroundColor" value="Transparent" />
+            <bizagi:BizagiProperty name="textDirection" value="" />
+          </bizagi:BizagiProperties>
+        </bizagi:BizagiExtensions>
+      </extensionElements>
+      <incoming>fa1</incoming>
+      <outgoing>fa2</outgoing>
+    </userTask>
+    <endEvent id="fim_aes" name="AES assinada">
+      <extensionElements>
+        <bizagi:BizagiExtensions xmlns:bizagi="http://www.bizagi.com/bpmn20">
+          <bizagi:BizagiProperties>
+            <bizagi:BizagiProperty name="bgColor" value="#EEAAAA" />
+            <bizagi:BizagiProperty name="borderColor" value="#990000" />
+            <bizagi:BizagiProperty name="textColor" value="Black" />
+            <bizagi:BizagiProperty name="textBackgroundColor" value="Transparent" />
+            <bizagi:BizagiProperty name="textDirection" value="" />
+          </bizagi:BizagiProperties>
+        </bizagi:BizagiExtensions>
+      </extensionElements>
+      <incoming>fa2</incoming>
+    </endEvent>
+    <sequenceFlow id="fa1" name="" sourceRef="t_laes" targetRef="t_aesass">
+      <extensionElements>
+        <bizagi:BizagiExtensions xmlns:bizagi="http://www.bizagi.com/bpmn20">
+          <bizagi:BizagiProperties>
+            <bizagi:BizagiProperty name="bgColor" value="White" />
+            <bizagi:BizagiProperty name="borderColor" value="Black" />
+            <bizagi:BizagiProperty name="textColor" value="Black" />
+            <bizagi:BizagiProperty name="textBackgroundColor" value="Transparent" />
+            <bizagi:BizagiProperty name="textDirection" value="" />
+          </bizagi:BizagiProperties>
+        </bizagi:BizagiExtensions>
+      </extensionElements>
+    </sequenceFlow>
+    <sequenceFlow id="fa2" name="" sourceRef="t_aesass" targetRef="fim_aes">
       <extensionElements>
         <bizagi:BizagiExtensions xmlns:bizagi="http://www.bizagi.com/bpmn20">
           <bizagi:BizagiProperties>
@@ -1521,6 +1579,27 @@
         <waypoint x="3326" y="295" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
         <waypoint x="3326" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
         <waypoint x="3351" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+      </BPMNEdge>
+      <BPMNShape id="DI_t_aesass" bpmnElement="t_aesass">
+        <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <Bounds x="679" y="446" width="130" height="74" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+      </BPMNShape>
+      <BPMNShape id="DI_fim_aes" bpmnElement="fim_aes">
+        <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <Bounds x="600" y="465" width="36" height="36" xmlns="http://www.omg.org/spec/DD/20100524/DC" />
+        <BPMNLabel id="DIL_fim_aes"><extension xmlns="http://www.omg.org/spec/DD/20100524/DI" /><Bounds x="573" y="505" width="90" height="20" xmlns="http://www.omg.org/spec/DD/20100524/DC" /></BPMNLabel>
+      </BPMNShape>
+      <BPMNEdge id="DI_fa1" bpmnElement="fa1">
+        <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="809" y="249" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="834" y="249" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="834" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="809" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+      </BPMNEdge>
+      <BPMNEdge id="DI_fa2" bpmnElement="fa2">
+        <extension xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="679" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
+        <waypoint x="636" y="483" xmlns="http://www.omg.org/spec/DD/20100524/DI" />
       </BPMNEdge>
     </BPMNPlane>
     <BPMNLabelStyle id="Style_b809f5cc-3709-44eb-af07-aecbc2530e18">
