@@ -1,10 +1,11 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.5.0';
+const VERSAO_APP = '1.6.0';
 const LIB = {
   pdf: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
-  pdfw: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
+  pdfw: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
+  pdflib: './pdf-lib.min.js'
 };
 const ALTERACOES = ['Poste deslocado', 'Estrutura diferente', 'Altura/esforço do poste diferente', 'Condutor/vão diferente', 'Equipamento diferente', 'Aterramento diferente', 'Outro'];
 const MOTIVOS_REP = ['Estrutura divergente do projeto', 'Poste fora de posição', 'Falta material ou acabamento', 'Segurança / aterramento', 'Foto não comprova', 'Outro'];
@@ -136,6 +137,7 @@ async function sincronizar(op) {
     const raw = await carregarRaw(s.pref);
     try {
       const d = await api(s, 'dados', raw.desde && !completo ? { desde: raw.desde } : {});
+      if (d.docs && JSON.stringify(d.docs) !== JSON.stringify(raw.docs)) { raw.docs = d.docs; mudou = true }
       if (aplicar(raw, d)) mudou = true;
       IDB.set('cache:' + s.pref, raw).catch(() => { });
     } catch (e) {
@@ -325,6 +327,8 @@ function route() {
   let m = h.match(/^(campo)(?:-(.+))?$/);
   if (!S.sess.length) { S.view = 'login' }
   else if (h === 'conta') { S.view = 'conta'; S.mode = S.mode || (soCampo ? 'campo' : 'gestao') }
+  else if (h === 'assinar' || /^doc-/.test(h)) { S.mode = soCampo ? 'campo' : (h === 'assinar' ? 'campo' : (S.mode || 'gestao')); S.view = h === 'assinar' ? 'assinar' : 'doc'; S.docId = h.slice(4) }
+  else if (h === 'docs' && !soCampo) { S.mode = 'gestao'; S.view = 'docs' }
   else if (m || soCampo) { S.mode = 'campo'; S.view = m && m[2] ? 'fobra' : 'flist'; S.obraId = m && m[2] ? m[2] : null }
   else {
     m = h.match(/^obra-(.+)$/); const mh = h.match(/^hist-(.+)$/);
@@ -341,7 +345,7 @@ function route() {
   $$('.modesw button').forEach(b => b.classList.toggle('on', b.dataset.m === S.mode));
   $('#nav').classList.toggle('hidden', S.mode === 'campo' || S.view === 'conta');
   $('#navnova').classList.toggle('hidden', !souGestor());
-  $$('#nav a').forEach(a => a.classList.toggle('on', a.dataset.v === S.view || (S.view === 'obra' && a.dataset.v === 'obras') || (S.view === 'hobra' && a.dataset.v === 'historico')));
+  $$('#nav a').forEach(a => a.classList.toggle('on', a.dataset.v === S.view || (S.view === 'obra' && a.dataset.v === 'obras') || (S.view === 'hobra' && a.dataset.v === 'historico') || (S.view === 'doc' && a.dataset.v === 'docs')));
   closeLayer(); render();
 }
 function go(h) { if (location.hash === '#' + h) route(); else location.hash = h }
@@ -353,13 +357,13 @@ let VIEWER = null;
 function render(fromData) {
   const app = $('#app');
   if (S.view === 'login') { vLogin(app); return }
-  if (fromData && (S.view === 'nova' || S.view === 'conta' || S.view === 'historico' || S.view === 'hobra')) return;
+  if (fromData && (S.view === 'nova' || S.view === 'conta' || S.view === 'historico' || S.view === 'hobra' || S.view === 'docs' || S.view === 'doc' || S.view === 'assinar')) return;
   if (fromData && S.view === 'fobra' && VIEWER && VIEWER.obraId === S.obraId) { VIEWER.refresh(); updFbot(); return }
   if (fromData && S.view === 'obra' && VIEWER && VIEWER.obraId === S.obraId) { VIEWER.refresh(); renderObraSide(); return }
   if (S.view === 'conta') { VIEWER = null; vConta(app); return }
   if (!S.carregado) { app.innerHTML = `<div class="empty">Carregando…</div>`; return }
   VIEWER = null;
-  ({ painel: vPainel, obras: vObras, nova: vNova, obra: vObra, flist: vFlist, fobra: vFobra, historico: vHistorico, hobra: vHObra }[S.view] || vPainel)(app);
+  ({ painel: vPainel, obras: vObras, nova: vNova, obra: vObra, flist: vFlist, fobra: vFobra, historico: vHistorico, hobra: vHObra, docs: vDocs, doc: vDoc, assinar: vAssinar }[S.view] || vPainel)(app);
 }
 function filtroDivHtml() {
   if (S.sess.length < 2) return '';
@@ -649,6 +653,7 @@ function renderObraSide() {
   });
   $$('[data-pk]', side).forEach(el => el.onclick = () => { SEL = el.dataset.pk; irParaPoste(o, SEL, OPTS_OBRA); renderObraSide() });
   ligarFiscalWeb(o, side);
+  if (hist) { const c = document.createElement('div'); c.className = 'card'; c.id = 'docsobra'; side.insertBefore(c, side.children[1] || null); cardDocsObra(o) }
   $('#addf') && ($('#addf').onclick = () => escolherPdf(f => processarPdf(f, o)));
 }
 function regHtml(o, r) {
@@ -1008,6 +1013,7 @@ function vFlist(app) {
   const s0 = S.sess[0];
   app.innerHTML = `<div class="fhead"><div class="who"><div><b>${esc(S.nome)}</b><div class="small muted">${copel ? 'Copel · fiscalização' : esc(s0.empresa)} · ${esc(S.sess.map(s => s.div).join(', '))}</div></div><a class="btn sm ghost" href="#conta" style="text-decoration:none">Conta</a></div>
    ${S.fila.length ? `<div class="note" style="margin-top:10px">${S.fila.length} registro(s) aguardando sinal para enviar. <button class="btn sm" id="envf">Tentar agora</button></div>` : ''}
+   ${!copel && docsTotal() ? `<a class="fcard" href="#assinar" style="display:block;margin-top:10px;text-decoration:none;color:inherit;${docsPend() ? 'background:#fff7ed;border:1px solid #fed7aa' : ''}"><b>📄 ${docsPend() ? docsPend() + ' documento(s) aguardando sua assinatura' : 'Documentos assinados'}</b><div class="small muted">BMD, FF e vistoria enviados pela Copel${docsPend() ? ' · toque para assinar' : ' · toque para baixar'}</div></a>` : ''}
    <div id="inst"></div></div>
    <div class="flist">${L.length ? L.map(o => {
     const I = S.idx[o.id]; const d = diasAte(o.prazo); return `<div class="fcard" data-o="${esc(o.id)}"><div class="t"><b>${esc(o.projeto)}</b><span class="pct" style="color:var(--or)">${fmt1(I.pct * 100)}%</span></div>
@@ -1358,3 +1364,181 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.se
   route();
   if (S.sess.length) { await sincronizar(); enviarFila() }
 })();
+
+/* ================= documentos para assinatura (BMD, FF, vistoria) ================= */
+const TIPOS_DOC = ['BMD', 'FF', 'Vistoria', 'Outro'];
+const docsPend = () => S.sess.reduce((n, s) => n + (((S.raw[s.pref] || {}).docs || {}).pendentes || 0), 0);
+const docsTotal = () => S.sess.reduce((n, s) => n + (((S.raw[s.pref] || {}).docs || {}).total || 0), 0);
+async function pdfLibA() { if (window.PDFLib) return window.PDFLib; await loadScript(LIB.pdflib); return window.PDFLib }
+function b64Bytes(b64) { const s = atob(b64); const u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return u }
+async function sha256Hex(bytes) { const h = await crypto.subtle.digest('SHA-256', bytes); return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, '0')).join('') }
+function baixarBytes(bytes, nome) { const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' })); const a = document.createElement('a'); a.href = url; a.download = nome; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000) }
+async function baixarDoc(s, id, versao, btn) {
+  const t = btn && btn.textContent; if (btn) { btn.disabled = true; btn.textContent = 'Baixando…' }
+  try { const j = await api(s, 'docPdf', { id, versao }); baixarBytes(b64Bytes(j.b64), j.nome || 'documento.pdf') } catch (e) { toast(msgServidor(e), 1) }
+  if (btn) { btn.disabled = false; btn.textContent = t }
+}
+const DOC_ST = d => d.status === 'assinado' ? `<span class="chip ok">assinado ${dtBR(d.assinadoEm)}</span>` : '<span class="chip alt">aguardando assinatura</span>';
+async function listarDocs(filtro) {
+  const L = []; let erro = '';
+  for (const s of S.sess) {
+    if (filtro && filtro.pref && s.pref !== filtro.pref) continue;
+    try { const j = await api(s, 'documentos', filtro && filtro.obra ? { obra: filtro.obra } : {}); (j.documentos || []).forEach(d => L.push(Object.assign(d, { pref: s.pref }))) }
+    catch (e) { erro = e.rede ? 'Sem conexão: os documentos precisam de internet.' : e.message }
+  }
+  return { L, erro };
+}
+function ligarDocBtns(root, L) {
+  $$('[data-dl]', root).forEach(b => b.onclick = e => { e.stopPropagation(); const d = L.find(x => x.id === b.dataset.dl); baixarDoc(sessDe(d.pref), d.id, b.dataset.v, b) });
+  $$('[data-dv]', root).forEach(b => b.onclick = e => { e.stopPropagation(); go('doc-' + b.dataset.dv) });
+  $$('[data-drm]', root).forEach(b => b.onclick = async e => {
+    e.stopPropagation(); if (!b.dataset.conf) { b.dataset.conf = 1; b.textContent = 'Confirmar remoção'; return }
+    const d = L.find(x => x.id === b.dataset.drm); b.disabled = true;
+    try { await api(sessDe(d.pref), 'removerDocumento', { id: d.id }); toast('Documento removido'); sincronizar(); render() } catch (err) { toast(msgServidor(err), 1); b.disabled = false }
+  });
+}
+/* Copel: todos os documentos */
+async function vDocs(app) {
+  app.innerHTML = `<div class="card"><div class="toolbar"><h2 style="margin:0 12px 0 0">Assinaturas · BMD, FF e vistoria</h2>
+    <select class="i" id="dst" style="width:auto"><option value="">Todos</option><option value="aguardando">Aguardando assinatura</option><option value="assinado">Assinados</option></select>
+    <input class="i" id="dq" placeholder="Buscar projeto, PEP, empreiteira…" style="min-width:220px"></div>
+    <p class="small muted" style="margin-top:0">Para enviar um documento, abra a obra no <a href="#historico">Histórico</a> e use “Documentos para assinatura”.</p><div id="dtb"><div class="empty">Carregando…</div></div></div>`;
+  const { L, erro } = await listarDocs();
+  if (S.view !== 'docs') return;
+  const draw = () => {
+    const q = ($('#dq').value || '').toLowerCase(), st = $('#dst').value;
+    const V = L.filter(d => (!st || (st === 'assinado') === (d.status === 'assinado')) && (!q || [d.projeto, d.pep, d.empreiteira, d.tipo, d.nome].join(' ').toLowerCase().includes(q)));
+    $('#dtb').innerHTML = erro && !L.length ? `<div class="empty">${esc(erro)}</div>` : V.length ? `<div style="overflow:auto"><table><thead><tr><th>Documento</th><th>Projeto</th><th>Empreiteira</th><th>Enviado</th><th>Situação</th><th></th></tr></thead><tbody>${V.map(d => `<tr class="cl" data-dv="${esc(d.id)}">
+      <td><b>${esc(d.tipo)}</b><div class="small muted">${esc(d.nome)}</div></td><td>${esc(d.projeto)}${d.pep ? `<div class="small muted">PEP ${esc(d.pep)}</div>` : ''}</td><td>${esc(d.empreiteira)}</td>
+      <td>${dtBR(d.enviadoEm)}<div class="small muted">${esc(d.enviadoPor || '')}</div></td><td>${DOC_ST(d)}${d.assinadoPor ? `<div class="small muted">${esc(d.assinadoPor)}</div>` : ''}</td>
+      <td style="white-space:nowrap">${d.status === 'assinado' ? `<button class="btn sm pri" data-dl="${esc(d.id)}" data-v="assinado">Baixar assinado</button>` : `<button class="btn sm ghost" data-drm="${esc(d.id)}">Remover</button>`}</td></tr>`).join('')}</tbody></table></div>`
+      : `<div class="empty">Nenhum documento${q || st ? ' com esse filtro' : ' enviado ainda'}.</div>`;
+    ligarDocBtns(app, L);
+  };
+  $('#dq').oninput = draw; $('#dst').onchange = draw; draw();
+}
+/* card na tela da obra (Histórico): enviar e acompanhar */
+async function cardDocsObra(o) {
+  const el = $('#docsobra'); if (!el) return;
+  const s = sessObra(o); const pode = s && s.papel !== 'empreiteira';
+  el.innerHTML = `<h3>Documentos para assinatura</h3><div id="dlist" class="small muted">Carregando…</div>
+   ${pode ? `<div style="background:#f4f6f9;border-radius:10px;padding:10px;margin-top:10px"><div class="row2"><div><label class="f" style="margin-top:0">Tipo</label><select class="i" id="dtipo">${TIPOS_DOC.map(t => `<option>${t}</option>`).join('')}</select></div>
+     <div><label class="f" style="margin-top:0">PDF</label><label class="btn sm ghost" style="display:block;text-align:center;cursor:pointer"><input type="file" accept="application/pdf" id="dfile" class="hidden"><span id="dfn">Escolher PDF</span></label></div></div>
+     <button class="btn sm pri" id="denv" style="width:100%;margin-top:10px" disabled>Enviar para ${esc(o.empreiteira)} assinar</button></div>` : ''}`;
+  let arq = null;
+  if (pode) {
+    $('#dfile').onchange = e => { arq = e.target.files[0] || null; $('#dfn').textContent = arq ? arq.name : 'Escolher PDF'; $('#denv').disabled = !arq };
+    $('#denv').onclick = async e => {
+      const b = e.currentTarget; if (!arq) return; if (arq.size > 20e6) { toast('PDF muito grande (máx. 20 MB)', 1); return }
+      b.disabled = true; b.textContent = 'Enviando…';
+      try { await api(s, 'enviarDocumento', { obra: o.id, tipo: $('#dtipo').value, pdf: { b64: await blobB64(arq), nome: arq.name } }); toast('Documento enviado: a empreiteira já pode assinar'); sincronizar(); cardDocsObra(o) }
+      catch (err) { toast(msgServidor(err), 1); b.disabled = false; b.textContent = 'Enviar para ' + o.empreiteira + ' assinar' }
+    };
+  }
+  const { L, erro } = await listarDocs({ obra: o.id, pref: o.pref });
+  const dl = $('#dlist'); if (!dl || getObra(S.obraId) !== o) return;
+  dl.innerHTML = erro && !L.length ? esc(erro) : L.length ? L.map(d => `<div class="docrow" data-dv="${esc(d.id)}"><div style="flex:1;min-width:0"><b>${esc(d.tipo)}</b> ${DOC_ST(d)}<div class="small muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.nome)}${d.assinadoPor ? ' · ' + esc(d.assinadoPor) : ''}</div></div>
+    ${d.status === 'assinado' ? `<button class="btn sm pri" data-dl="${esc(d.id)}" data-v="assinado">Baixar</button>` : pode ? `<button class="btn sm ghost" data-drm="${esc(d.id)}">Remover</button>` : ''}</div>`).join('') : 'Nenhum documento enviado. Envie o BMD, a FF ou a vistoria em PDF para a empreiteira assinar pelo app.';
+  dl.classList.toggle('muted', !L.length);
+  ligarDocBtns(el, L);
+}
+/* Empreiteira: lista para assinar */
+async function vAssinar(app) {
+  app.innerHTML = `<div class="fhead"><div class="who"><div><b>Documentos para assinar</b><div class="small muted">BMD, FF e vistoria enviados pela Copel</div></div><a class="btn sm ghost" href="#campo" style="text-decoration:none">← Obras</a></div></div><div class="flist" id="alist"><div class="fcard empty">Carregando…</div></div>`;
+  const { L, erro } = await listarDocs();
+  if (S.view !== 'assinar') return;
+  L.sort((a, b) => (a.status === 'assinado') - (b.status === 'assinado') || String(b.enviadoEm).localeCompare(String(a.enviadoEm)));
+  $('#alist').innerHTML = erro && !L.length ? `<div class="fcard empty">${esc(erro)}</div>` : L.length ? L.map(d => `<div class="fcard" data-dv="${esc(d.id)}"><div class="t"><b>${esc(d.tipo)} · ${esc(d.projeto)}</b>${DOC_ST(d)}</div>
+     <div class="s">${esc(d.nome)}${d.pep ? '<br>PEP ' + esc(d.pep) : ''}<br>Enviado ${dtBR(d.enviadoEm)}</div>
+     <div style="margin-top:8px">${d.status === 'assinado' ? `<button class="btn sm pri" data-dl="${esc(d.id)}" data-v="assinado">⬇️ Baixar PDF assinado</button>` : `<button class="btn sm dk" data-dv="${esc(d.id)}">✍️ Abrir e assinar</button>`}</div></div>`).join('')
+    : `<div class="fcard empty">Nenhum documento para assinar.</div>`;
+  ligarDocBtns(app, L);
+  $$('.fcard[data-dv]', app).forEach(c => c.onclick = () => go('doc-' + c.dataset.dv));
+}
+/* Visualizar (e assinar) um documento */
+async function vDoc(app) {
+  const id = S.docId; const campo = S.mode === 'campo';
+  app.innerHTML = `<div class="${campo ? 'fhead' : ''}"><div class="who card" style="display:flex;align-items:center;gap:10px;padding:10px 12px"><a class="btn sm ghost" href="#${campo ? 'assinar' : 'docs'}" style="text-decoration:none">←</a><div style="flex:1;min-width:0" id="dtit"><b>Carregando documento…</b></div></div></div>
+   <div id="dpages" class="dpages"></div><div id="dbar"></div>`;
+  const { L } = await listarDocs(); const d = L.find(x => x.id === id);
+  if (S.view !== 'doc' || S.docId !== id) return;
+  if (!d) { $('#dtit').innerHTML = '<b>Documento não encontrado</b>'; return }
+  const s = sessDe(d.pref);
+  $('#dtit').innerHTML = `<b>${esc(d.tipo)} · projeto ${esc(d.projeto)}</b><div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(d.nome)} · ${d.status === 'assinado' ? 'assinado por ' + esc(d.assinadoPor) + ' em ' + dtBR(d.assinadoEm) : 'aguardando assinatura de ' + esc(d.empreiteira)}</div>`;
+  let j; try { j = await api(s, 'docPdf', { id, versao: d.status === 'assinado' ? 'assinado' : 'original' }) } catch (e) { $('#dpages').innerHTML = `<div class="card empty">${esc(msgServidor(e))}</div>`; return }
+  const bytes = b64Bytes(j.b64);
+  const podeAssinar = s.papel === 'empreiteira' && d.status !== 'assinado';
+  const bar = $('#dbar');
+  bar.innerHTML = `<div class="dsign">${podeAssinar ? `<button class="btn pri" id="dass" style="flex:1;padding:14px;font-size:15px">✍️ Assinar documento</button>` : d.status === 'assinado' ? `<button class="btn pri" id="dbx" style="flex:1;padding:12px">⬇️ Baixar PDF assinado</button>` : `<span class="small muted" style="flex:1">Aguardando a assinatura da empreiteira. O download do original não fica disponível para ela antes de assinar.</span>`}</div>`;
+  $('#dbx') && ($('#dbx').onclick = () => baixarBytes(bytes, j.nome));
+  $('#dass') && ($('#dass').onclick = () => telaAssinar(d, s, bytes));
+  // páginas
+  try {
+    const lib = await pdfLib(); const doc = await lib.getDocument({ data: bytes.slice(0), isEvalSupported: false, disableFontFace: true }).promise;
+    const host = $('#dpages'); const W = Math.min(host.clientWidth || innerWidth, 1100) - 4;
+    for (let i = 1; i <= Math.min(doc.numPages, 30); i++) {
+      if (S.view !== 'doc') return;
+      const pg = await doc.getPage(i); const v1 = pg.getViewport({ scale: 1 }); const sc = W / v1.width * Math.min(2, devicePixelRatio || 1);
+      const vp = pg.getViewport({ scale: sc }); const cv = document.createElement('canvas'); cv.width = vp.width; cv.height = vp.height; cv.style.width = W + 'px';
+      host.appendChild(cv); await pg.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+    }
+    if (doc.numPages > 30) host.insertAdjacentHTML('beforeend', `<div class="small muted" style="text-align:center;padding:8px">Mostrando 30 de ${doc.numPages} páginas.</div>`);
+  } catch (e) { console.error(e); $('#dpages').innerHTML = `<div class="card empty">Não consegui mostrar o PDF (${esc(e.message || e)}).</div>` }
+}
+function telaAssinar(d, s, bytes) {
+  openLayer(`<div class="ov" id="asov" style="align-items:flex-end;padding:0"><div class="sheet" style="width:100%"><div class="grab"></div>
+    <div style="display:flex;justify-content:space-between;align-items:center"><h4>Assinar ${esc(d.tipo)} · ${esc(d.projeto)}</h4><button class="btn sm ghost" id="asx">Fechar</button></div>
+    <label class="f">Nome completo de quem assina</label><input class="i" id="asn" value="${esc(S.nome || '')}" autocomplete="name">
+    <label class="f">Empresa</label><input class="i" value="${esc(s.empresa)}" disabled>
+    <label style="display:flex;gap:10px;align-items:flex-start;margin-top:14px;font-size:13.5px"><input type="checkbox" id="asck" style="width:22px;height:22px;flex:none;margin-top:1px"><span>Li o documento e concordo em assiná-lo eletronicamente em nome da ${esc(s.empresa)}.</span></label>
+    <button class="btn pri" id="asok" style="width:100%;margin-top:16px;padding:14px;font-size:15px" disabled>Assinar agora</button>
+    <div class="small muted" style="margin-top:8px">A assinatura registra seu nome, a data e hora, o código de acesso da empresa e a impressão digital (SHA-256) do documento. O PDF assinado ganha um carimbo em cada página e uma folha de assinatura no final.</div></div></div>`);
+  const val = () => $('#asok').disabled = !($('#asn').value.trim().length >= 5 && $('#asck').checked);
+  $('#asn').oninput = val; $('#asck').onchange = val;
+  $('#asx').onclick = closeLayer; $('#asov').onclick = e => { if (e.target.id === 'asov') closeLayer() };
+  $('#asok').onclick = async e => {
+    const b = e.currentTarget; b.disabled = true; b.textContent = 'Assinando…';
+    const nome = $('#asn').value.trim(); S.nome = S.nome || nome;
+    try {
+      const hashOriginal = await sha256Hex(bytes);
+      if (hashOriginal !== d.hash) throw new Error('o documento recebido não confere com o original');
+      const quando = new Date();
+      const assinado = await carimbarPdf(bytes, { nome, empresa: s.empresa, quando, id: d.id, tipo: d.tipo, projeto: d.projeto, pep: d.pep, arquivo: d.nome, hash: hashOriginal, chave: String(s.chave).slice(-4), div: s.div });
+      b.textContent = 'Enviando…';
+      await api(s, 'assinarDocumento', { id: d.id, nome, hashOriginal, assinadoEm: quando.toISOString(), dispositivo: navigator.userAgent, pdf: { b64: await blobB64(new Blob([assinado])) } });
+      closeLayer(); toast('Documento assinado');
+      $('#dbar').innerHTML = `<div class="dsign"><button class="btn pri" id="dbx" style="flex:1;padding:12px">⬇️ Baixar PDF assinado</button></div>`;
+      $('#dbx').onclick = () => baixarBytes(assinado, 'ASSINADO_' + d.nome);
+      sincronizar();
+    } catch (err) { console.error(err); b.disabled = false; b.textContent = 'Assinar agora'; toast(err.rede ? 'Sem conexão: a assinatura precisa de internet.' : 'Não foi possível assinar: ' + (err.message || err), 1) }
+  };
+}
+/** Carimba cada página e acrescenta a folha de assinatura (pdf-lib, no próprio aparelho). */
+async function carimbarPdf(bytes, a) {
+  const { PDFDocument, StandardFonts, rgb, degrees } = await pdfLibA();
+  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+  const f = await doc.embedFont(StandardFonts.Helvetica), fb = await doc.embedFont(StandardFonts.HelveticaBold);
+  const ok = t => String(t || '').normalize('NFC').replace(/[^\x20-\x7E -ÿ]/g, '?');
+  const pad = n => String(n).padStart(2, '0'); const q = a.quando;
+  const dataTx = `${pad(q.getDate())}/${pad(q.getMonth() + 1)}/${q.getFullYear()} ${pad(q.getHours())}:${pad(q.getMinutes())}:${pad(q.getSeconds())}`;
+  const carimbo = ok(`Assinado eletronicamente por ${a.nome} (${a.empresa}) em ${dataTx} - ID ${a.id} - SHA-256 ${a.hash.slice(0, 16)}...`);
+  const cor = rgb(0.05, 0.25, 0.55);
+  for (const pg of doc.getPages()) {
+    const { width: w, height: h } = pg.getSize(); const ang = ((pg.getRotation().angle % 360) + 360) % 360;
+    const comp = ang === 90 || ang === 270 ? h : w; let sz = 6.5; while (sz > 4 && f.widthOfTextAtSize(carimbo, sz) > comp - 24) sz -= .25;
+    const pos = ang === 90 ? { x: w - 7, y: 12, r: 90 } : ang === 180 ? { x: w - 12, y: h - 7, r: 180 } : ang === 270 ? { x: 7, y: h - 12, r: 270 } : { x: 12, y: 7, r: 0 };
+    pg.drawText(carimbo, { x: pos.x, y: pos.y, size: sz, font: f, color: cor, rotate: degrees(pos.r) });
+  }
+  const pg = doc.addPage([595.28, 841.89]); let y = 762;
+  const tx = (t, o = {}) => { pg.drawText(ok(t), { x: o.x || 56, y, size: o.size || 10.5, font: o.b ? fb : f, color: o.c || rgb(0.1, 0.12, 0.16) }); y -= o.gap ?? 17 };
+  pg.drawRectangle({ x: 40, y: 40, width: 515.28, height: 761.89, borderColor: cor, borderWidth: 1.2 });
+  tx('FOLHA DE ASSINATURA ELETRÔNICA', { b: true, size: 16, c: cor, gap: 26 });
+  tx(`Fiscalização de Obras · Copel · ${a.div || ''}`, { size: 10, gap: 30 });
+  const campos = [['Documento', `${a.tipo} - ${a.arquivo}`], ['Projeto', a.projeto], ['PEP', a.pep || '-'], ['Assinado por', a.nome], ['Empresa', a.empresa], ['Data e hora', dataTx + ' (horário do aparelho)'], ['ID da assinatura', a.id], ['Código de acesso', 'final ' + a.chave]];
+  for (const [k, v] of campos) { tx(k, { b: true, gap: 0 }); tx(v, { x: 190 }) }
+  y -= 8; tx('SHA-256 do documento original', { b: true, gap: 15 }); tx(a.hash.slice(0, 32), { x: 56, size: 10 }); tx(a.hash.slice(32), { x: 56, size: 10, gap: 28 });
+  const aviso = 'Assinatura eletrônica realizada no app Fiscalização de Obras mediante código de acesso da empresa e aceite expresso do signatário. As páginas anteriores reproduzem o documento original enviado pela Copel; a integridade dele pode ser conferida pelo SHA-256 acima. O registro da assinatura (nome, data e hora, código e dispositivo) fica guardado no sistema da Copel.';
+  let linha = ''; for (const w of ok(aviso).split(' ')) { if (f.widthOfTextAtSize(linha + ' ' + w, 9.5) > 480) { tx(linha, { size: 9.5, gap: 13 }); linha = w } else linha = linha ? linha + ' ' + w : w } if (linha) tx(linha, { size: 9.5 });
+  doc.setModificationDate(q); doc.setProducer('Fiscalização de Obras · Copel');
+  return await doc.save();
+}

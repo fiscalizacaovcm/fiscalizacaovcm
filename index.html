@@ -113,6 +113,10 @@ textarea.i{min-height:64px;resize:vertical}
 .est .lbl.ok{background:#dcfce7;color:#166534}.est .lbl.bad{background:#fee2e2;color:#991b1b}
 .est .tag{font-size:12.5px;font-weight:700;background:#eef0f3;border-radius:6px;padding:2px 8px}
 .est .tag.r{text-decoration:line-through;color:#991b1b;background:#fff1f1}
+.docrow{display:flex;gap:10px;align-items:center;padding:9px 0;border-top:1px solid var(--ln);cursor:pointer}
+.dpages{display:flex;flex-direction:column;align-items:center;gap:10px;padding:12px 8px 96px}
+.dpages canvas{background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.18);max-width:100%;height:auto}
+.dsign{position:fixed;left:0;right:0;bottom:0;display:flex;gap:10px;align-items:center;padding:10px 14px calc(10px + env(safe-area-inset-bottom));background:#fff;border-top:1px solid var(--ln);z-index:20}
 .viewer .ftabs{position:absolute;left:10px;bottom:10px;z-index:6;display:flex;gap:6px;flex-wrap:wrap;max-width:calc(100% - 70px)}
 .viewer .ftabs button{border:0;border-radius:999px;padding:7px 12px;font-weight:700;font-size:13px;background:#fff;color:var(--nv);box-shadow:0 1px 5px rgba(0,0,0,.28);cursor:pointer}
 .viewer .ftabs button.on{background:var(--nv);color:#fff}
@@ -201,6 +205,7 @@ body{padding-top:env(safe-area-inset-top)}
     <a href="#painel" data-v="painel">Painel</a>
     <a href="#obras" data-v="obras">Obras</a>
     <a href="#historico" data-v="historico">Histórico</a>
+    <a href="#docs" data-v="docs">Assinaturas</a>
     <a href="#nova" data-v="nova" id="navnova">Empenhar obra</a>
   </nav>
   <div class="sp"></div>

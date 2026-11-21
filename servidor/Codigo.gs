@@ -7,20 +7,24 @@
  * Para atualizar o código depois: Implantar > Gerenciar implantações > ✏️ > Versão: Nova versão > Implantar.
  * NUNCA use "Nova implantação" de novo, porque o endereço muda e o app perde a conexão.
  */
-const VERSAO_SERVIDOR = '1.4';
+const VERSAO_SERVIDOR = '1.5';
 
 const COLS_OBRAS = ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us',
   'empenhoEm', 'prazo', 'status', 'lat', 'lon', 'locOrigem', 'plantaId', 'plantaW', 'plantaH', 'pdfId', 'pdfNome',
   'postes', 'criadoPor', 'criadoEm', 'atualizadoEm', 'concluidaEm', 'resumo', 'pep', 'encerramento', 'folhas'];
 const COLS_REGS = ['id', 'obra', 'poste', 'tipo', 'alt', 'obs', 'fotoId', 'lat', 'lon', 'gpsOrigem', 'precisao', 'dataExec',
   'marcadoEm', 'recebidoEm', 'nome', 'empresa', 'x', 'y', 'invalido', 'invalidadoPor', 'alteradoEm', 'folha'];
+const COLS_DOCS = ['id', 'obra', 'projeto', 'pep', 'empreiteira', 'tipo', 'nome', 'pdfId', 'hash', 'enviadoPor', 'enviadoEm', 'status',
+  'assinadoPor', 'assinadoEm', 'assinaturaChave', 'dispositivo', 'pdfAssinadoId', 'hashAssinado', 'alteradoEm'];
+const TIPOS_DOC = ['BMD', 'FF', 'Vistoria', 'Outro'];
 const ABAS = {
   obras: COLS_OBRAS,
   registros: COLS_REGS,
   chaves: ['chave', 'papel', 'empresa', 'responsavel', 'ativa', 'criadaEm', 'ultimoUso'],
   config: ['item', 'valor'],
   obras_historico: COLS_OBRAS,
-  registros_historico: COLS_REGS
+  registros_historico: COLS_REGS,
+  documentos: COLS_DOCS
 };
 const COL_DATA = ['empenhoEm', 'prazo', 'dataExec'];
 const COL_NUM = ['us', 'lat', 'lon', 'plantaW', 'plantaH', 'precisao', 'x', 'y', 'folha'];
@@ -168,6 +172,11 @@ function doPost(e) {
       case 'fiscalizarLote': return json(fiscalizarLote(p, req));
       case 'adicionarFolhas': return json(adicionarFolhas(p, req));
       case 'invalidar': return json(invalidar(p, req));
+      case 'documentos': return json(documentos(p, req));
+      case 'enviarDocumento': return json(enviarDocumento(p, req));
+      case 'docPdf': return json(docPdf(p, req));
+      case 'assinarDocumento': return json(assinarDocumento(p, req));
+      case 'removerDocumento': return json(removerDocumento(p, req));
       default: return json({ ok: false, erro: 'ação desconhecida' });
     }
   } catch (err) {
@@ -201,6 +210,7 @@ function dados(p, req) {
     qtdHistorico: Math.max(0, (aba('obras_historico') ? aba('obras_historico').getLastRow() : 1) - 1)
   };
   if (p.papel !== 'empreiteira') out.empreiteiras = listaEmpreiteiras();
+  out.docs = resumoDocs(p);
   return out;
 }
 function normObra(o) {
@@ -644,4 +654,102 @@ function comTrava(fn) {
   const lock = LockService.getScriptLock();
   lock.waitLock(25000);
   try { fn(); } finally { lock.releaseLock(); }
+}
+
+/* ============================ documentos para assinatura (BMD, FF, vistoria) ============================ */
+/** Pasta dos documentos: privada (não é compartilhada por link); só sai pelo app, com código de acesso. */
+function pastaDocs() {
+  const cfg = lerConfig();
+  if (cfg.pastaDocs) { try { return DriveApp.getFolderById(cfg.pastaDocs); } catch (e) { } }
+  const f = DriveApp.createFolder('Fiscalização ' + (cfg.divisao || '') + ' · documentos assinados');
+  salvarConfig('pastaDocs', f.getId());
+  return f;
+}
+function sha256(bytes) {
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, bytes)
+    .map(function (b) { return ('0' + (b & 255).toString(16)).slice(-2); }).join('');
+}
+function docsVisiveis(p) {
+  const L = ler('documentos');
+  return p.papel === 'empreiteira' ? L.filter(function (d) { return norm(d.empreiteira) === norm(p.empresa); }) : L;
+}
+function resumoDocs(p) {
+  const L = docsVisiveis(p);
+  return { pendentes: L.filter(function (d) { return d.status !== 'assinado'; }).length, total: L.length };
+}
+function docPublico(d) {
+  const o = {};
+  COLS_DOCS.forEach(function (k) { if (k !== 'assinaturaChave') o[k] = d[k]; });
+  o.chaveFinal = d.assinaturaChave ? String(d.assinaturaChave).slice(-4) : '';
+  return o;
+}
+function documentos(p, req) {
+  let L = docsVisiveis(p);
+  if (req.obra) L = L.filter(function (d) { return d.obra === req.obra; });
+  L.sort(function (a, b) { return String(b.enviadoEm).localeCompare(String(a.enviadoEm)); });
+  return { ok: true, documentos: L.map(docPublico) };
+}
+function acharObraQualquer(id) {
+  return ler('obras').filter(function (o) { return o.id === id; })[0] || ler('obras_historico').filter(function (o) { return o.id === id; })[0] || null;
+}
+function enviarDocumento(p, req) {
+  if (p.papel === 'empreiteira') return { ok: false, erro: 'só a Copel envia documentos para assinatura' };
+  const o = acharObraQualquer(req.obra);
+  if (!o) return { ok: false, erro: 'obra não encontrada' };
+  if (!req.pdf || !req.pdf.b64) return { ok: false, erro: 'PDF não enviado' };
+  const tipo = TIPOS_DOC.indexOf(req.tipo) >= 0 ? req.tipo : 'Outro';
+  const bytes = Utilities.base64Decode(req.pdf.b64);
+  const id = 'D' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36);
+  const nome = req.pdf.nome || (tipo + '_' + o.projeto + '.pdf');
+  const arq = pastaDocs().createFile(Utilities.newBlob(bytes, 'application/pdf', o.projeto + '_' + tipo + '_' + id + '.pdf'));
+  const agora = agoraIso();
+  const linha = {
+    id: id, obra: o.id, projeto: o.projeto, pep: o.pep || '', empreiteira: o.empreiteira, tipo: tipo, nome: nome, pdfId: arq.getId(),
+    hash: sha256(bytes), enviadoPor: p.responsavel || p.papel, enviadoEm: agora, status: 'aguardando', alteradoEm: agora
+  };
+  comTrava(function () { anexar('documentos', linha); marcarAlteracao(); });
+  return { ok: true, documento: docPublico(linha) };
+}
+function docPdf(p, req) {
+  const d = docsVisiveis(p).filter(function (x) { return x.id === req.id; })[0];
+  if (!d) return { ok: false, erro: 'documento não encontrado' };
+  const assinado = req.versao === 'assinado';
+  if (assinado && !d.pdfAssinadoId) return { ok: false, erro: 'documento ainda não assinado' };
+  const blob = DriveApp.getFileById(assinado ? d.pdfAssinadoId : d.pdfId).getBlob();
+  return { ok: true, b64: Utilities.base64Encode(blob.getBytes()), nome: (assinado ? 'ASSINADO_' : '') + d.nome, hash: assinado ? d.hashAssinado : d.hash };
+}
+function assinarDocumento(p, req) {
+  if (p.papel !== 'empreiteira') return { ok: false, erro: 'quem assina é a empreiteira' };
+  const d = docsVisiveis(p).filter(function (x) { return x.id === req.id; })[0];
+  if (!d) return { ok: false, erro: 'documento não encontrado' };
+  if (d.status === 'assinado') return { ok: true, repetido: true, documento: docPublico(d) };
+  if (!req.nome || !String(req.nome).trim()) return { ok: false, erro: 'informe o nome de quem assina' };
+  if (!req.pdf || !req.pdf.b64) return { ok: false, erro: 'PDF assinado não enviado' };
+  // confere que o PDF assinado partiu do mesmo original que a Copel enviou
+  const hashOrig = sha256(DriveApp.getFileById(d.pdfId).getBlob().getBytes());
+  if (hashOrig !== d.hash || req.hashOriginal !== d.hash) return { ok: false, erro: 'o documento original foi alterado; peça um novo envio' };
+  const bytes = Utilities.base64Decode(req.pdf.b64);
+  const arq = pastaDocs().createFile(Utilities.newBlob(bytes, 'application/pdf', 'ASSINADO_' + d.projeto + '_' + d.tipo + '_' + d.id + '.pdf'));
+  const campos = {
+    status: 'assinado', assinadoPor: String(req.nome).trim() + ' · ' + p.empresa, assinadoEm: req.assinadoEm || agoraIso(), assinaturaChave: p.chave,
+    dispositivo: String(req.dispositivo || '').slice(0, 200), pdfAssinadoId: arq.getId(), hashAssinado: sha256(bytes), alteradoEm: agoraIso()
+  };
+  let ok = false;
+  comTrava(function () { ok = atualizarLinha('documentos', d.id, campos); marcarAlteracao(); });
+  if (!ok) return { ok: false, erro: 'não foi possível gravar' };
+  Object.keys(campos).forEach(function (k) { d[k] = campos[k]; });
+  return { ok: true, documento: docPublico(d) };
+}
+function removerDocumento(p, req) {
+  if (p.papel === 'empreiteira') return { ok: false, erro: 'sem permissão' };
+  const d = ler('documentos').filter(function (x) { return x.id === req.id; })[0];
+  if (!d) return { ok: false, erro: 'documento não encontrado' };
+  if (d.status === 'assinado') return { ok: false, erro: 'documento já assinado não pode ser removido' };
+  let ok = false;
+  comTrava(function () {
+    const row = buscarLinha('documentos', d.id);
+    if (row) { aba('documentos').deleteRow(row); ok = true; marcarAlteracao(); }
+  });
+  try { DriveApp.getFileById(d.pdfId).setTrashed(true); } catch (e) { }
+  return { ok: ok };
 }
