@@ -7,13 +7,13 @@
  * Para atualizar o código depois: Implantar > Gerenciar implantações > ✏️ > Versão: Nova versão > Implantar.
  * NUNCA use "Nova implantação" de novo, porque o endereço muda e o app perde a conexão.
  */
-const VERSAO_SERVIDOR = '1.3.1';
+const VERSAO_SERVIDOR = '1.4';
 
 const COLS_OBRAS = ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us',
   'empenhoEm', 'prazo', 'status', 'lat', 'lon', 'locOrigem', 'plantaId', 'plantaW', 'plantaH', 'pdfId', 'pdfNome',
-  'postes', 'criadoPor', 'criadoEm', 'atualizadoEm', 'concluidaEm', 'resumo', 'pep', 'encerramento'];
+  'postes', 'criadoPor', 'criadoEm', 'atualizadoEm', 'concluidaEm', 'resumo', 'pep', 'encerramento', 'folhas'];
 const COLS_REGS = ['id', 'obra', 'poste', 'tipo', 'alt', 'obs', 'fotoId', 'lat', 'lon', 'gpsOrigem', 'precisao', 'dataExec',
-  'marcadoEm', 'recebidoEm', 'nome', 'empresa', 'x', 'y', 'invalido', 'invalidadoPor', 'alteradoEm'];
+  'marcadoEm', 'recebidoEm', 'nome', 'empresa', 'x', 'y', 'invalido', 'invalidadoPor', 'alteradoEm', 'folha'];
 const ABAS = {
   obras: COLS_OBRAS,
   registros: COLS_REGS,
@@ -23,7 +23,7 @@ const ABAS = {
   registros_historico: COLS_REGS
 };
 const COL_DATA = ['empenhoEm', 'prazo', 'dataExec'];
-const COL_NUM = ['us', 'lat', 'lon', 'plantaW', 'plantaH', 'precisao', 'x', 'y'];
+const COL_NUM = ['us', 'lat', 'lon', 'plantaW', 'plantaH', 'precisao', 'x', 'y', 'folha'];
 const PAPEIS = ['gestor', 'fiscal', 'empreiteira'];
 /** Papel tolerante a digitação: "Empreiteria", "empreiteira " etc. viram "empreiteira". */
 function normPapel(v) {
@@ -165,6 +165,8 @@ function doPost(e) {
       case 'historico': return json(historico(p));
       case 'obraHistorico': return json(obraHistorico(p, req));
       case 'registrar': return json(registrar(p, req));
+      case 'fiscalizarLote': return json(fiscalizarLote(p, req));
+      case 'adicionarFolhas': return json(adicionarFolhas(p, req));
       case 'invalidar': return json(invalidar(p, req));
       default: return json({ ok: false, erro: 'ação desconhecida' });
     }
@@ -204,6 +206,7 @@ function dados(p, req) {
 function normObra(o) {
   try { o.postes = JSON.parse(o.postes || '[]'); } catch (err) { o.postes = []; }
   try { o.resumo = o.resumo ? JSON.parse(o.resumo) : null; } catch (err) { o.resumo = null; }
+  try { o.folhas = o.folhas ? JSON.parse(o.folhas) : []; } catch (err) { o.folhas = []; }
   return o;
 }
 function normReg(r) {
@@ -251,11 +254,48 @@ function empenhar(p, req) {
   linha.pdfId = pdfId;
   linha.pdfNome = pdfNome;
   linha.postes = JSON.stringify(o.postes || []);
+  linha.folhas = JSON.stringify(salvarFolhas(req.folhas, id, 2));
   linha.criadoPor = p.responsavel || p.chave;
   linha.criadoEm = agoraIso();
   linha.atualizadoEm = linha.criadoEm;
   comTrava(function () { anexar('obras', linha); marcarAlteracao(); });
   return { ok: true, id: id };
+}
+
+/** Grava as imagens das folhas 2, 3… da planta no Drive. */
+function salvarFolhas(lista, id, primeira) {
+  if (!lista || !lista.length) return [];
+  const pasta = DriveApp.getFolderById(lerConfig().pastaPlantas);
+  return lista.map(function (f, i) {
+    const arq = pasta.createFile(Utilities.newBlob(Utilities.base64Decode(f.b64), 'image/jpeg', id + '_folha' + (primeira + i) + '.jpg'));
+    return { id: arq.getId(), w: f.w, h: f.h };
+  });
+}
+
+/** Acrescenta folhas (e os postes delas) a uma obra já empenhada. */
+function adicionarFolhas(p, req) {
+  if (p.papel !== 'gestor') return { ok: false, erro: 'só o gestor pode alterar a obra' };
+  const o = ler('obras').filter(function (x) { return x.id === req.id; })[0];
+  if (!o) return { ok: false, erro: 'obra não encontrada ou já concluída' };
+  if (!req.folhas || !req.folhas.length) return { ok: false, erro: 'nenhuma folha enviada' };
+  let folhas = [], postes = [];
+  try { folhas = o.folhas ? JSON.parse(o.folhas) : []; } catch (err) { }
+  try { postes = JSON.parse(o.postes || '[]'); } catch (err) { }
+  const base = folhas.length + 1;  // índice (0 = folha 1) da primeira folha nova
+  const novas = salvarFolhas(req.folhas, o.id, base + 1);
+  const usados = {}; postes.forEach(function (x) { usados[x.n] = 1; });
+  let incluidos = 0;
+  (req.postes || []).forEach(function (x) {
+    if (usados[x.n]) return;
+    usados[x.n] = 1; incluidos++;
+    postes.push({ n: x.n, x: x.x, y: x.y, nota: x.nota || '', acao: x.acao || '', estruturas: x.estruturas || [], f: base + (Number(x.f) || 0) });
+  });
+  let ok = false;
+  comTrava(function () {
+    ok = atualizarLinha('obras', o.id, { folhas: JSON.stringify(folhas.concat(novas)), postes: JSON.stringify(postes), atualizadoEm: agoraIso() });
+    marcarAlteracao();
+  });
+  return ok ? { ok: true, folhas: novas.length, postes: incluidos } : { ok: false, erro: 'não foi possível gravar' };
 }
 
 function atualizarObra(p, req) {
@@ -404,7 +444,8 @@ function registrar(p, req) {
     fotoId: fotoId, lat: g.lat != null ? g.lat : '', lon: g.lon != null ? g.lon : '', gpsOrigem: g.origem || '',
     precisao: g.precisao != null ? g.precisao : '', dataExec: r.dataExec || '', marcadoEm: r.marcadoEm || '',
     recebidoEm: agora, nome: r.nome || p.responsavel || '', empresa: p.papel === 'empreiteira' ? p.empresa : (r.empresa || p.empresa),
-    x: r.x != null ? r.x : '', y: r.y != null ? r.y : '', invalido: '', invalidadoPor: '', alteradoEm: agora
+    x: r.x != null ? r.x : '', y: r.y != null ? r.y : '', invalido: '', invalidadoPor: '', alteradoEm: agora,
+    folha: r.folha != null ? r.folha : ''
   };
   let encerrada = false;
   comTrava(function () {
@@ -416,6 +457,33 @@ function registrar(p, req) {
     }
   });
   return { ok: true, id: r.id, fotoId: fotoId, encerrada: encerrada };
+}
+
+/** Fiscal aprova/reprova vários postes de uma vez (botão "Aprovar todos os executados"). */
+function fiscalizarLote(p, req) {
+  if (p.papel === 'empreiteira') return { ok: false, erro: 'só a fiscalização pode aprovar ou reprovar postes' };
+  const L = (req.registros || []).filter(function (r) { return r && r.id && r.obra && TIPOS_FISC.indexOf(r.tipo) >= 0; });
+  if (!L.length) return { ok: false, erro: 'nada para registrar' };
+  const idObra = L[0].obra;
+  const obra = ler('obras').filter(function (o) { return o.id === idObra; })[0];
+  if (!obra) return { ok: false, erro: 'obra não encontrada ou já concluída' };
+  const agora = agoraIso();
+  let encerrada = false, gravados = 0;
+  comTrava(function () {
+    L.forEach(function (r) {
+      if (r.obra !== idObra || buscarLinha('registros', r.id)) return;
+      anexar('registros', {
+        id: r.id, obra: r.obra, poste: r.poste || '', tipo: r.tipo, alt: (r.alt || []).join(' | '), obs: r.obs || '', fotoId: '',
+        lat: '', lon: '', gpsOrigem: '', precisao: '', dataExec: r.dataExec || '', marcadoEm: r.marcadoEm || agora, recebidoEm: agora,
+        nome: r.nome || p.responsavel || '', empresa: r.empresa || p.empresa, x: '', y: '', invalido: '', invalidadoPor: '', alteradoEm: agora, folha: ''
+      });
+      gravados++;
+    });
+    if (gravados) marcarAlteracao();
+    const regsObra = ler('registros').filter(function (x) { return x.obra === idObra; });
+    if (obraFiscalizada(obra, regsObra)) encerrada = encerrarObra(idObra, 'fiscalização concluída · ' + (L[0].nome || p.responsavel || p.papel));
+  });
+  return { ok: true, gravados: gravados, encerrada: encerrada };
 }
 
 function invalidar(p, req) {

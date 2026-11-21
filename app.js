@@ -1,7 +1,7 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.4.0';
+const VERSAO_APP = '1.5.0';
 const LIB = {
   pdf: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   pdfw: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
@@ -80,9 +80,10 @@ function normalizar(pref, d) {
     lat: o.lat === '' || o.lat == null ? null : Number(o.lat), lon: o.lon === '' || o.lon == null ? null : Number(o.lon),
     planta: { id: o.plantaId, w: Number(o.plantaW) || 2000, h: Number(o.plantaH) || 1400 }, pdf: o.pdfId ? { id: o.pdfId, nome: o.pdfNome } : null
   }));
+  obras.forEach(o => { o.folhas = [o.planta].concat((Array.isArray(o.folhas) ? o.folhas : []).map(f => ({ id: f.id, w: Number(f.w) || 2000, h: Number(f.h) || 1400 }))) });
   const regs = (d.registros || []).map(r => Object.assign({}, r, {
     pref, em: r.marcadoEm || r.recebidoEm, equipe: r.nome, foto: r.fotoId ? { id: r.fotoId } : null,
-    x: r.x === '' ? null : r.x, y: r.y === '' ? null : r.y, poste: r.poste || null
+    x: r.x === '' ? null : r.x, y: r.y === '' ? null : r.y, poste: r.poste || null, folha: Number(r.folha) || 0
   }));
   return { obras, regs };
 }
@@ -199,7 +200,7 @@ function novoIdx() { return { postes: new Map(), novos: [], regs: [], ultimo: nu
 function acumular(I, r) {
   I.regs.push(r);
   if (r.invalido) return;
-  if (r.tipo === 'novo' && !I.novos.find(n => n.key === 'N:' + r.id)) I.novos.push({ key: 'N:' + r.id, x: Number(r.x), y: Number(r.y), desc: r.obs, id: r.id });
+  if (r.tipo === 'novo' && !I.novos.find(n => n.key === 'N:' + r.id)) I.novos.push({ key: 'N:' + r.id, x: Number(r.x), y: Number(r.y), desc: r.obs, id: r.id, f: Number(r.folha) || 0 });
   const key = r.tipo === 'novo' ? 'N:' + r.id : r.poste;
   const st = I.postes.get(key) || { hist: [], first: null };
   st.hist.push(r);
@@ -545,16 +546,51 @@ function estHtml(p) {
   const ins = e.filter(x => !x.r), ret = e.filter(x => x.r);
   return `<div class="est">${ins.length ? `<div><span class="lbl ok">Instalar</span>${ins.map(x => `<span class="tag">${esc(x.t)}</span>`).join('')}</div>` : ''}${ret.length ? `<div><span class="lbl bad">Retirar</span>${ret.map(x => `<span class="tag r">${esc(x.t)}</span>`).join('')}</div>` : ''}</div>`;
 }
-function markersObra(o, sel) {
-  const L = (o.postes || []).map(p => ({ key: 'P' + p.n, label: String(p.n), x: p.x, y: p.y, cls: statusPoste(o, 'P' + p.n) + (p.acao === 'retirar' ? ' ret' : '') + (sel === 'P' + p.n ? ' sel' : '') }));
-  const I = S.idx[o.id]; (I ? I.novos : []).forEach((n, i) => L.push({ key: n.key, label: '+' + (i + 1), x: n.x, y: n.y, cls: statusPoste(o, n.key) + (sel === n.key ? ' sel' : '') }));
+function markersObra(o, sel, f) {
+  const L = (o.postes || []).filter(p => f == null || (p.f || 0) === f).map(p => ({ key: 'P' + p.n, label: String(p.n), x: p.x, y: p.y, cls: statusPoste(o, 'P' + p.n) + (p.acao === 'retirar' ? ' ret' : '') + (sel === 'P' + p.n ? ' sel' : '') }));
+  const I = S.idx[o.id]; (I ? I.novos : []).forEach((n, i) => (f == null || (n.f || 0) === f) && L.push({ key: n.key, label: '+' + (i + 1), x: n.x, y: n.y, cls: statusPoste(o, n.key) + (sel === n.key ? ' sel' : '') }));
   return L;
 }
 function rotuloPoste(o, key) { if (key && key.startsWith('P')) return 'Poste ' + key.slice(1); const I = S.idx[o.id]; const i = I.novos.findIndex(n => n.key === key); return 'Poste não previsto +' + (i + 1) }
 function plantaSrc(o) { return { src: driveImg(o.planta.id, Math.max(o.planta.w, o.planta.h)), alt: driveImg2(o.planta.id, Math.max(o.planta.w, o.planta.h)) } }
 
+/* ---------- planta com várias folhas ---------- */
+let FOLHA = 0;
+function folhaDe(o, key) {
+  if (!key) return FOLHA;
+  if (key.startsWith('P')) { const p = (o.postes || []).find(p => 'P' + p.n === key); return p ? (p.f || 0) : 0 }
+  const I = S.idx[o.id]; const n = I && I.novos.find(n => n.key === key); return n ? (n.f || 0) : 0;
+}
+/** Abas "Folha 1 · Folha 2" por cima da planta. */
+function abasFolhas(host, n, atual, rot, onPick) {
+  if (n < 2) return;
+  const t = document.createElement('div'); t.className = 'ftabs';
+  t.innerHTML = Array.from({ length: n }, (_, i) => `<button data-f="${i}" class="${i === atual ? 'on' : ''}">${esc(rot(i))}</button>`).join('');
+  t.addEventListener('pointerdown', e => e.stopPropagation());
+  $$('button', t).forEach(b => b.onclick = e => { e.stopPropagation(); onPick(+b.dataset.f) });
+  host.appendChild(t);
+}
+/** Recria o visualizador num elemento novo (evita eventos duplicados ao trocar de folha). */
+function hostLimpo(sel) { const old = $(sel); const nw = document.createElement('div'); nw.id = old.id; old.replaceWith(nw); return nw }
+function montarPlanta(o, opts) {
+  if (FOLHA >= o.folhas.length) FOLHA = 0;
+  const fo = o.folhas[FOLHA], W = Math.max(fo.w, fo.h);
+  const host = hostLimpo('#vw');
+  const v = Viewer(host, { img: driveImg(fo.id, W), imgAlt: driveImg2(fo.id, W), iw: fo.w, ih: fo.h, fitMarkers: true, getMarkers: () => markersObra(o, opts.getSel ? opts.getSel() : null, FOLHA), onMarker: opts.onMarker, onPlace: opts.onPlace });
+  v.obraId = o.id;
+  abasFolhas(host, o.folhas.length, FOLHA, i => `Folha ${i + 1} · ${markersObra(o, null, i).length}`, i => { FOLHA = i; VIEWER = montarPlanta(o, opts) });
+  return v;
+}
+/** Leva a planta até o poste (troca de folha se precisar). */
+function irParaPoste(o, key, opts) {
+  const f = folhaDe(o, key);
+  if (f !== FOLHA) { FOLHA = f; VIEWER = montarPlanta(o, opts) }
+  const m = markersObra(o, null, FOLHA).find(m => m.key === key); m && VIEWER.focus(m.x, m.y); VIEWER.refresh();
+}
+
 /* ---------- detalhe da obra (gestão) ---------- */
 let SEL = null;
+const OPTS_OBRA = { getSel: () => SEL, onMarker: k => { SEL = k; VIEWER.refresh(); renderObraSide() } };
 function vObra(app) {
   const o = getObra(S.obraId); const hist = S.view === 'hobra';
   if (!o) { app.innerHTML = `<div class="card empty">Obra não encontrada. <a href="#obras">Voltar</a></div>`; return }
@@ -562,9 +598,8 @@ function vObra(app) {
   app.innerHTML = `<div class="toolbar"><a href="#${hist ? 'historico' : 'obras'}" class="btn ghost sm" style="text-decoration:none">← ${hist ? 'Histórico' : 'Obras'}</a><h2 style="margin:0">Projeto ${esc(o.projeto)}</h2>${hist ? `<span class="chip ok">concluída ${dBR((o.concluidaEm || '').slice(0, 10))}</span>` : ''}<span class="muted">${esc(o.descricao || '')}</span><span style="flex:1"></span>
     <div class="legend"><span style="--c:var(--pend)">a executar</span><span style="--c:var(--ok)">conforme</span><span style="--c:var(--alt)">com alteração</span><span style="--c:var(--bad)">não executado</span><span style="--c:var(--novo)">não previsto</span><span class="small">✓ = aprovado pelo fiscal</span><span class="small">▢ quadrado = retirar</span></div></div>
    <div class="det"><div id="vw"></div><div class="grid" id="side"></div></div>`;
-  const ps = plantaSrc(o);
-  VIEWER = Viewer($('#vw'), { img: ps.src, imgAlt: ps.alt, iw: o.planta.w, ih: o.planta.h, fitMarkers: true, getMarkers: () => markersObra(o, SEL), onMarker: k => { SEL = k; VIEWER.refresh(); renderObraSide() } });
-  VIEWER.obraId = o.id;
+  FOLHA = 0;
+  VIEWER = montarPlanta(o, OPTS_OBRA);
   renderObraSide();
 }
 function renderObraSide() {
@@ -580,6 +615,7 @@ function renderObraSide() {
     <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:12px"><h3 style="margin:0">Fiscalização</h3><b class="pct" style="font-size:18px;color:var(--ok)">${fmt1(I.pctFis * 100)}%</b></div>
     <div class="bar" style="height:8px;margin:6px 0"><i class="b-ok" style="width:${I.pctFis * 100}%"></i><i class="b-bad" style="width:${I.rep / (I.tot || 1) * 100}%"></i></div>
     <div class="small">${I.fis} de ${I.tot} postes aprovados (medidos)${I.rep ? ` · <b style="color:var(--bad)">${I.rep} reprovado(s)</b>` : ''} · US medidas: ${fmt(I.usMed)}</div>
+    ${!hist && podeFiscalizar(o) && aFiscalizar(o).length ? `<button class="btn sm" id="flote" style="margin-top:10px;background:var(--ok);color:#fff">✔️ Aprovar todos os executados (${aFiscalizar(o).length})</button><div class="small muted" style="margin-top:4px">Ou clique num poste da planta para aprovar ou reprovar um por um.</div>` : ''}
     ${hist && o.encerramento ? `<div class="small muted" style="margin-top:6px">Encerramento: ${esc(o.encerramento)}</div>` : ''}</div>
    <div class="card"><h3>Dados do empenho</h3><div class="kv">
     ${S.sess.length > 1 ? `<b>Divisão</b><span>${esc((sessObra(o) || {}).div || '')}</span>` : ''}
@@ -589,9 +625,10 @@ function renderObraSide() {
     <b>OSE</b><span>${esc(o.ose || '—')}</span><b>Projetista</b><span>${esc(o.projetista || '—')}</span><b>Status</b><span>${o.status === 'concluida' ? '<span class="chip ok">concluída</span>' : '<span class="chip or">em andamento</span>'}</span>
    </div>
    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">${o.pdf ? `<a class="btn sm ghost" href="${esc(driveVer(o.pdf.id))}" target="_blank" rel="noopener" style="text-decoration:none">Abrir PDF do projeto</a>` : ''}
-    ${podeEditarObra(o) ? (hist ? `<button class="btn sm dk" id="reab">Reabrir obra</button>` : `<button class="btn sm ghost" id="edob">Editar dados</button><button class="btn sm dk" id="conc">Encerrar obra (manual)</button>`) : ''}</div></div>
-   <div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">${SEL ? esc(rotuloPoste(o, SEL)) : 'Registros de campo'}</h3>${SEL ? `<button class="btn sm ghost" id="clr">Ver todos</button>` : ''}</div>
+    ${podeEditarObra(o) ? (hist ? `<button class="btn sm dk" id="reab">Reabrir obra</button>` : `<button class="btn sm ghost" id="edob">Editar dados</button><button class="btn sm ghost" id="addf">+ Adicionar folha</button><button class="btn sm dk" id="conc">Encerrar obra (manual)</button>`) : ''}</div></div>
+   <div class="card" ${SEL ? 'style="order:-1"' : ''}><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">${SEL ? esc(rotuloPoste(o, SEL)) : 'Registros de campo'}</h3>${SEL ? `<button class="btn sm ghost" id="clr">Ver todos</button>` : ''}</div>
    ${SEL && SEL.startsWith('P') ? (() => { const p = o.postes.find(p => 'P' + p.n === SEL); return p && (p.estruturas || []).length ? `<div style="margin:8px 0">${estHtml(p)}</div>` : p && p.nota ? `<div class="small muted" style="margin:6px 0">Previsto: ${esc(p.nota)}</div>` : '' })() : ''}
+   ${fiscalWebHtml(o)}
    <div class="feed" style="margin-top:8px">${regs.length ? regs.map(r => regHtml(o, r)).join('') : `<div class="muted small">${SEL ? 'Nenhum registro para este poste.' : 'Nenhum registro em campo ainda.'}</div>`}</div></div>`;
   $('#clr') && ($('#clr').onclick = () => { SEL = null; VIEWER.refresh(); renderObraSide() });
   $('#edob') && ($('#edob').onclick = () => editarObra(o));
@@ -610,7 +647,9 @@ function renderObraSide() {
     const r = S.regs.find(x => x.id === b.dataset.inv); if (!r) return; b.disabled = true;
     try { await api(sessObra(o), 'invalidar', { id: r.id, invalido: !r.invalido }); toast(r.invalido ? 'Registro restaurado' : 'Registro desconsiderado'); sincronizar() } catch (e) { b.disabled = false; toast('Não foi possível salvar: ' + e.message, 1) }
   });
-  $$('[data-pk]', side).forEach(el => el.onclick = () => { SEL = el.dataset.pk; const m = markersObra(o).find(m => m.key === SEL); m && VIEWER.focus(m.x, m.y); VIEWER.refresh(); renderObraSide() });
+  $$('[data-pk]', side).forEach(el => el.onclick = () => { SEL = el.dataset.pk; irParaPoste(o, SEL, OPTS_OBRA); renderObraSide() });
+  ligarFiscalWeb(o, side);
+  $('#addf') && ($('#addf').onclick = () => escolherPdf(f => processarPdf(f, o)));
 }
 function regHtml(o, r) {
   const key = r.tipo === 'novo' ? 'N:' + r.id : r.poste;
@@ -709,9 +748,10 @@ async function vHObra(app) {
 let NOVA = null;
 function vNova(app) {
   if (!souGestor()) { app.innerHTML = `<div class="card empty">Só o gestor pode empenhar obras.</div>`; return }
+  if (NOVA && NOVA.modo === 'add') { editorNova(); return }
   NOVA = null;
   app.innerHTML = `<div class="card" style="max-width:760px;margin:0 auto"><h2>Empenhar obra para uma empreiteira</h2>
-   <p class="muted" style="margin-top:0">Suba o PDF do projeto. O app lê o carimbo, localiza o município e marca os postes numerados da planta. Depois você confere, ajusta e informa empreiteira, AES, US e prazo.</p>
+   <p class="muted" style="margin-top:0">Suba o PDF do projeto. O app lê o carimbo, localiza o município e marca os postes numerados da planta (todas as folhas do PDF). Depois você confere, ajusta e informa empreiteira, AES, US e prazo.</p>
    <label class="drop" id="drop" style="display:block;cursor:pointer"><input type="file" accept="application/pdf" id="fpdf" class="hidden"><div style="font-size:15px;font-weight:700">Clique para escolher o PDF do projeto</div><div class="small muted" style="margin-top:4px">ou arraste o arquivo para cá</div></label>
    <div id="prog" class="small muted" style="margin-top:10px"></div></div>`;
   const drop = $('#drop');
@@ -722,82 +762,154 @@ function vNova(app) {
 }
 function loadScript(src){return new Promise((ok,ko)=>{const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=()=>ko(new Error('não carregou '+src));document.head.appendChild(s)})}
 async function pdfLib() { if (window.pdfjsLib) return window.pdfjsLib; await loadScript(LIB.pdfw); await loadScript(LIB.pdf); return window.pdfjsLib }
-async function processarPdf(file) {
-  const prog = $('#prog'); const st = t => prog.textContent = t;
-  try {
-    st('Carregando leitor de PDF…'); const lib = await pdfLib();
-    st('Lendo o projeto…');
-    const buf = await file.arrayBuffer();
-    const doc = await lib.getDocument({ data: new Uint8Array(buf.slice(0)), isEvalSupported: false, disableFontFace: true }).promise;
-    const page = await doc.getPage(1);
+function escolherPdf(cb) { const i = document.createElement('input'); i.type = 'file'; i.accept = 'application/pdf'; i.onchange = () => { const f = i.files[0]; f && cb(f) }; i.click() }
+const MAX_FOLHAS = 10;
+/** Lê cada página do PDF: texto, postes, estruturas e a imagem da folha. */
+async function lerPaginas(file, st) {
+  st('Carregando leitor de PDF…'); const lib = await pdfLib();
+  st('Lendo o projeto…');
+  const buf = await file.arrayBuffer();
+  const doc = await lib.getDocument({ data: new Uint8Array(buf.slice(0)), isEvalSupported: false, disableFontFace: true }).promise;
+  const n = Math.min(doc.numPages, MAX_FOLHAS); const pags = [];
+  for (let i = 1; i <= n; i++) {
+    const pre = n > 1 ? `Folha ${i} de ${n}: ` : '';
+    const page = await doc.getPage(i);
     const vp1 = page.getViewport({ scale: 1 });
     const tc = await page.getTextContent();
     const items = tc.items.map(i => { const [a, b, , , e, g] = i.transform; const [x, y] = vp1.convertToViewportPoint(e, g); const L = Math.hypot(a, b) || 1; const [x2] = vp1.convertToViewportPoint(e + i.width * a / L, g + i.width * b / L); return { str: i.str, x: Math.min(x, x2), y, w: Math.abs(x2 - x) || i.width, h: L } });
-    st('Procurando os postes no desenho…');
+    st(pre + 'procurando os postes no desenho…');
     let geo = null; try { geo = geometriaPdf(await page.getOperatorList(), vp1, lib.OPS) } catch (e) { console.warn('geometria', e) }
     const R = analisarTexto(items, vp1.width, vp1.height, PRMAP.c.map(c => c[0]), geo);
-    st('Gerando a imagem da planta…');
+    st(pre + 'gerando a imagem da planta…');
     const scale = Math.min(3, 2600 / Math.max(vp1.width, vp1.height));
     const vp = page.getViewport({ scale }); const cv = document.createElement('canvas'); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
     const ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
     await page.render({ canvasContext: ctx, viewport: vp }).promise;
-    const png = await new Promise(r => cv.toBlob(r, 'image/jpeg', .88));
-    let loc = null;
-    if (R.utm) { const ll = utmToLatLon(R.utm.e, R.utm.n); if (ll.lat < -22 && ll.lat > -27 && ll.lon < -48 && ll.lon > -55) loc = { lat: +ll.lat.toFixed(6), lon: +ll.lon.toFixed(6), src: 'utm' } }
-    if (!loc && R.ll) loc = { lat: +R.ll.lat.toFixed(6), lon: +R.ll.lon.toFixed(6), src: 'coordenada' };
-    if (!loc && R.municipio) { const c = PRMAP.c.find(z => z[0] === R.municipio); loc = { lat: c[1], lon: c[2], src: 'municipio' } }
+    const png = await new Promise(r => cv.toBlob(r, 'image/jpeg', .86));
+    cv.width = cv.height = 1; try { page.cleanup() } catch (e) { }
+    pags.push({ R, png, url: URL.createObjectURL(png), w: Math.round(vp.width), h: Math.round(vp.height) });
+  }
+  return { pags, total: doc.numPages };
+}
+/** Junta os postes das folhas; número repetido em outra folha fica só na primeira. */
+function juntarPostes(pags, usados, base) {
+  const vistos = new Set(usados || []); const postes = []; const rep = [];
+  pags.forEach((pg, i) => pg.R.postes.forEach(p => {
+    if (vistos.has(p.n)) { rep.push(p.n); return }
+    vistos.add(p.n); postes.push({ ...p, nota: p.nota || '', acao: p.acao || '', estruturas: p.estruturas || [], f: (base || 0) + i });
+  }));
+  return { postes, rep };
+}
+async function processarPdf(file, obraAdd) {
+  let prog = $('#prog');
+  if (obraAdd || !prog) { openLayer(`<div class="ov"><div class="box"><h2>Lendo o PDF…</h2><div id="prog" class="small muted"></div></div></div>`); prog = $('#prog') }
+  const st = t => { if (prog) prog.textContent = t };
+  try {
+    let { pags, total } = await lerPaginas(file, st);
+    const usados = obraAdd ? (obraAdd.postes || []).map(p => p.n) : [];
+    let ignoradas = 0;
+    if (obraAdd) {   // folha que já está na obra (todos os postes dela já existem) é ignorada
+      const fora = pags.filter(pg => pg.R.postes.length && pg.R.postes.every(p => usados.includes(p.n)));
+      ignoradas = fora.length; if (fora.length < pags.length) pags = pags.filter(pg => !fora.includes(pg));
+    }
+    const J = juntarPostes(pags, usados, 0);
+    const campos = {}; pags.forEach(pg => Object.entries(pg.R.campos || {}).forEach(([k, v]) => { if (v && !campos[k]) campos[k] = v }));
+    const R0 = pags.find(pg => pg.R.utm) || pags.find(pg => pg.R.ll) || pags.find(pg => pg.R.municipio) || pags[0];
+    const municipio = (pags.find(pg => pg.R.municipio) || {}).R?.municipio || '';
+    let loc = null; const utm = R0.R.utm || null;
+    if (utm) { const ll = utmToLatLon(utm.e, utm.n); if (ll.lat < -22 && ll.lat > -27 && ll.lon < -48 && ll.lon > -55) loc = { lat: +ll.lat.toFixed(6), lon: +ll.lon.toFixed(6), src: 'utm' } }
+    if (!loc && R0.R.ll) loc = { lat: +R0.R.ll.lat.toFixed(6), lon: +R0.R.ll.lon.toFixed(6), src: 'coordenada' };
+    if (!loc && municipio) { const c = PRMAP.c.find(z => z[0] === municipio); loc = { lat: c[1], lon: c[2], src: 'municipio' } }
     const divs = S.sess.filter(s => s.papel === 'gestor');
-    NOVA = { file, png, url: URL.createObjectURL(png), w: cv.width, h: cv.height, postes: R.postes.map(p => ({ ...p, nota: p.nota || '', acao: p.acao || '', estruturas: p.estruturas || [] })), campos: { ...R.campos, municipio: R.municipio, empenhoEm: hoje(), pref: S.divFiltro && divs.some(s => s.pref === S.divFiltro) ? S.divFiltro : divs[0].pref }, loc, utm: R.utm, sel: null, divs };
-    editorNova();
-  } catch (e) { console.error(e); st('Não consegui ler este PDF: ' + (e.message || e)); toast('Erro ao ler o PDF', 1) }
+    NOVA = {
+      modo: obraAdd ? 'add' : 'novo', obra: obraAdd || null, file, folhas: pags.map(pg => ({ png: pg.png, url: pg.url, w: pg.w, h: pg.h })), f: 0,
+      postes: J.postes, rep: J.rep, total, ignoradas,
+      campos: { ...campos, municipio, empenhoEm: hoje(), pref: obraAdd ? obraAdd.pref : (S.divFiltro && divs.some(s => s.pref === S.divFiltro) ? S.divFiltro : (divs[0] || {}).pref) }, loc, utm, sel: null, divs
+    };
+    closeLayer();
+    if (obraAdd) go('nova'); else editorNova();
+  } catch (e) { console.error(e); st('Não consegui ler este PDF: ' + (e.message || e)); toast('Erro ao ler o PDF', 1); if (obraAdd) setTimeout(closeLayer, 3500) }
 }
 function editorNova() {
-  const app = $('#app'); const N = NOVA;
+  const app = $('#app'); const N = NOVA; const add = N.modo === 'add';
   const emps = [...new Set(S.obras.map(x => x.empreiteira).filter(Boolean))];
-  const ja = S.obras.find(o => o.projeto === N.campos.projeto);
-  app.innerHTML = `<div class="toolbar"><button class="btn ghost sm" id="vol">← Outro PDF</button><h2 style="margin:0">Conferir projeto ${esc(N.campos.projeto || '')}</h2><span style="flex:1"></span>
-   <button class="btn sm ghost" id="add">+ Adicionar poste</button><button class="btn sm ghost" id="ren">Renumerar</button></div>
+  const ja = add ? null : S.obras.find(o => o.projeto === N.campos.projeto);
+  const usadosObra = add ? (N.obra.postes || []).map(p => p.n) : [];
+  app.innerHTML = `<div class="toolbar"><button class="btn ghost sm" id="vol">← ${add ? 'Voltar à obra' : 'Outro PDF'}</button><h2 style="margin:0">${add ? 'Adicionar folha à obra ' + esc(N.obra.projeto) : 'Conferir projeto ' + esc(N.campos.projeto || '')}</h2><span style="flex:1"></span>
+   <button class="btn sm ghost" id="add">+ Adicionar poste</button>${add ? '' : '<button class="btn sm ghost" id="ren">Renumerar</button>'}<button class="btn sm ghost" id="maisf">+ Folha de outro PDF</button><button class="btn sm ghost hidden" id="remf">Remover esta folha</button></div>
    <div class="edlay"><div id="vw"></div>
    <div class="card" style="max-height:calc(100vh - 170px);overflow:auto">
     <div class="note ${N.postes.length ? 'ok-note' : ''}" id="pnote"></div>
     <div class="plist" id="plist"></div>
     <div id="psel"></div>
-    ${ja ? `<div class="note" style="margin-top:10px">Já existe uma obra com o projeto ${esc(ja.projeto)}. Salvar vai criar outra obra separada.</div>` : ''}
-    <div class="note" style="margin-top:10px;background:#f4f6f9;border-color:var(--ln);color:var(--tx)">Localização: ${N.loc ? (N.loc.src === 'utm' ? `coordenada UTM do desenho (${fmt1(N.utm.e)}, ${fmt1(N.utm.n)})` : N.loc.src === 'coordenada' ? `coordenada do desenho (${N.loc.lat}, ${N.loc.lon})` : `centro do município de ${esc(N.campos.municipio)}`) : 'não encontrada no PDF. Informe o município ou ela virá do GPS dos registros.'}</div>
-    <div id="nf">${formCampos(N.campos, emps, N.divs)}</div>
-    <button class="btn pri" id="salvar" style="width:100%;margin-top:16px;padding:12px">Empenhar obra</button>
+    ${ja ? `<div class="note" style="margin-top:10px">Já existe uma obra com o projeto ${esc(ja.projeto)}. Salvar vai criar outra obra separada. Para incluir folhas numa obra que já existe, abra a obra e use “+ Adicionar folha”.</div>` : ''}
+    ${add ? `<div class="note" style="margin-top:10px;background:#f4f6f9;border-color:var(--ln);color:var(--tx)">As folhas e os postes daqui vão ser acrescentados à obra ${esc(N.obra.projeto)} (hoje com ${N.obra.folhas.length} folha${N.obra.folhas.length > 1 ? 's' : ''} e ${(N.obra.postes || []).length} postes). Número de poste que já existe na obra não é repetido.${N.ignoradas ? ` ${N.ignoradas} folha(s) do PDF já estavam na obra e foram ignoradas.` : ''}</div>`
+      : `<div class="note" style="margin-top:10px;background:#f4f6f9;border-color:var(--ln);color:var(--tx)">Localização: ${N.loc ? (N.loc.src === 'utm' ? `coordenada UTM do desenho (${fmt1(N.utm.e)}, ${fmt1(N.utm.n)})` : N.loc.src === 'coordenada' ? `coordenada do desenho (${N.loc.lat}, ${N.loc.lon})` : `centro do município de ${esc(N.campos.municipio)}`) : 'não encontrada no PDF. Informe o município ou ela virá do GPS dos registros.'}</div>`}
+    <div id="nf" class="${add ? 'hidden' : ''}">${add ? '' : formCampos(N.campos, emps, N.divs)}</div>
+    <button class="btn pri" id="salvar" style="width:100%;margin-top:16px;padding:12px">${add ? 'Adicionar à obra' : 'Empenhar obra'}</button>
     <div class="small muted" id="sst" style="margin-top:8px"></div>
    </div></div>`;
-  const ed = Viewer($('#vw'), {
-    img: N.url, iw: N.w, ih: N.h, editable: true,
-    getMarkers: () => N.postes.map(p => ({ key: String(p.n), label: String(p.n), x: p.x, y: p.y, cls: 'ed' + (p.acao === 'retirar' ? ' ret' : '') + (N.sel === p.n ? ' sel' : '') })),
-    onMarker: k => { N.sel = +k; ed.refresh(); side() },
-    onMove: (k, p) => { const q = N.postes.find(x => x.n === +k); q.x = +p.x.toFixed(5); q.y = +p.y.toFixed(5); N.sel = +k; ed.refresh(); side() },
-    onPlace: p => { const n = (Math.max(0, ...N.postes.map(x => x.n)) + 1); N.postes.push({ n, x: +p.x.toFixed(5), y: +p.y.toFixed(5), nota: '' }); N.sel = n; ed.setPlacing(false); ed.refresh(); side() }
-  });
+  const numUsado = (v, p) => N.postes.some(x => x !== p && x.n === v) || usadosObra.includes(v);
+  let ed;
+  function mount() {
+    if (N.f >= N.folhas.length) N.f = 0;
+    const fo = N.folhas[N.f]; const host = hostLimpo('#vw');
+    ed = Viewer(host, {
+      img: fo.url, iw: fo.w, ih: fo.h, editable: true,
+      getMarkers: () => N.postes.filter(p => (p.f || 0) === N.f).map(p => ({ key: String(p.n), label: String(p.n), x: p.x, y: p.y, cls: 'ed' + (p.acao === 'retirar' ? ' ret' : '') + (N.sel === p.n ? ' sel' : '') })),
+      onMarker: k => { N.sel = +k; ed.refresh(); side() },
+      onMove: (k, p) => { const q = N.postes.find(x => x.n === +k); q.x = +p.x.toFixed(5); q.y = +p.y.toFixed(5); N.sel = +k; ed.refresh(); side() },
+      onPlace: p => { const n = Math.max(0, ...N.postes.map(x => x.n), ...usadosObra) + 1; N.postes.push({ n, x: +p.x.toFixed(5), y: +p.y.toFixed(5), nota: '', acao: '', estruturas: [], f: N.f }); N.sel = n; ed.setPlacing(false); ed.refresh(); side() }
+    });
+    abasFolhas(host, N.folhas.length, N.f, i => `Folha ${i + 1} · ${N.postes.filter(p => (p.f || 0) === i).length}`, i => { N.f = i; N.sel = null; mount(); side() });
+    $('#remf').classList.toggle('hidden', N.folhas.length < 2);
+  }
   function side() {
     N.postes.sort((a, b) => a.n - b.n);
-    $('#pnote').innerHTML = N.postes.length ? `<b>${N.postes.length} postes</b> marcados na planta${N.postes.some(p => p.acao === 'retirar') ? ` (${N.postes.filter(p => p.acao === 'retirar').length} a retirar, em quadrado)` : ''}. Confira: arraste um número para corrigir a posição, clique para editar ou excluir, e use “+ Adicionar poste” para algum que faltou.` : `<b>Nenhum poste numerado foi encontrado.</b> Use “+ Adicionar poste” e clique na planta sobre cada poste a executar.`;
-    $('#plist').innerHTML = N.postes.map(p => `<span data-n="${p.n}" class="${N.sel === p.n ? 'sel' : ''}" title="${esc(p.nota || '')}">${p.n}${p.acao === 'retirar' ? ' ✕' : p.acao === 'modificar' ? ' ±' : p.nota ? ' •' : ''}</span>`).join('');
-    $$('#plist span').forEach(s => s.onclick = () => { N.sel = +s.dataset.n; const p = N.postes.find(x => x.n === N.sel); ed.focus(p.x, p.y); ed.refresh(); side() });
+    const nf = N.folhas.length;
+    $('#pnote').innerHTML = (N.postes.length ? `<b>${N.postes.length} postes</b> marcados${nf > 1 ? ` em <b>${nf} folhas</b>` : ' na planta'}${N.postes.some(p => p.acao === 'retirar') ? ` (${N.postes.filter(p => p.acao === 'retirar').length} a retirar, em quadrado)` : ''}. Confira: arraste um número para corrigir a posição, clique para editar ou excluir, e use “+ Adicionar poste” para algum que faltou.` : `<b>Nenhum poste numerado foi encontrado.</b> Use “+ Adicionar poste” e clique na planta sobre cada poste a executar.`)
+      + (N.total > MAX_FOLHAS ? `<br>O PDF tem ${N.total} páginas; foram lidas as ${MAX_FOLHAS} primeiras.` : '')
+      + (N.rep && N.rep.length ? `<br><span class="small">Poste(s) ${[...new Set(N.rep)].join(', ')} aparece(m) em mais de uma folha (ou já existe(m) na obra): ficou só a primeira marcação.</span>` : '');
+    $('#plist').innerHTML = N.postes.map(p => `<span data-n="${p.n}" class="${N.sel === p.n ? 'sel' : ''}" title="${esc((nf > 1 ? 'Folha ' + ((p.f || 0) + 1) + ' · ' : '') + (p.nota || ''))}">${p.n}${p.acao === 'retirar' ? ' ✕' : p.acao === 'modificar' ? ' ±' : p.nota ? ' •' : ''}</span>`).join('');
+    $$('#plist span').forEach(s => s.onclick = () => { N.sel = +s.dataset.n; const p = N.postes.find(x => x.n === N.sel); if ((p.f || 0) !== N.f) { N.f = p.f || 0; mount() } ed.focus(p.x, p.y); ed.refresh(); side() });
     const p = N.postes.find(x => x.n === N.sel);
-    $('#psel').innerHTML = p ? `<div style="background:#f4f6f9;border-radius:10px;padding:10px;margin-top:10px"><div class="row2"><div><label class="f" style="margin-top:0">Número</label><input class="i" id="pn" type="number" value="${p.n}"></div><div style="display:flex;align-items:flex-end;justify-content:flex-end"><button class="btn sm" id="pdel" style="background:#fee2e2;color:#991b1b">Excluir poste</button></div></div>
+    $('#psel').innerHTML = p ? `<div style="background:#f4f6f9;border-radius:10px;padding:10px;margin-top:10px"><div class="row2"><div><label class="f" style="margin-top:0">Número${nf > 1 ? ` <span class="muted">· folha ${(p.f || 0) + 1}</span>` : ''}</label><input class="i" id="pn" type="number" value="${p.n}"></div><div style="display:flex;align-items:flex-end;justify-content:flex-end"><button class="btn sm" id="pdel" style="background:#fee2e2;color:#991b1b">Excluir poste</button></div></div>
       ${(p.estruturas || []).length ? `<label class="f">Estruturas lidas do PDF</label>${estHtml(p)}` : ''}
       <label class="f">Ação no poste</label><select class="i" id="pacao">${[['', '—'], ['instalar', 'Instalar'], ['retirar', 'Retirar'], ['modificar', 'Modificar (instalar e retirar)']].map(([v, t]) => `<option value="${v}" ${(p.acao || '') === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
       <label class="f">O que deve ser feito</label><input class="i" id="pnota" value="${esc(p.nota || '')}" placeholder="Ex.: Instalar: B1 · SI-3"></div>` : '';
     if (p) {
-      $('#pn').onchange = e => { const v = parseInt(e.target.value, 10); if (!v || N.postes.some(x => x !== p && x.n === v)) { toast('Número inválido ou repetido', 1); e.target.value = p.n; return } p.n = v; N.sel = v; ed.refresh(); side() };
+      $('#pn').onchange = e => { const v = parseInt(e.target.value, 10); if (!v || numUsado(v, p)) { toast('Número inválido ou repetido', 1); e.target.value = p.n; return } p.n = v; N.sel = v; ed.refresh(); side() };
       $('#pnota').oninput = e => { p.nota = e.target.value };
       $('#pacao').onchange = e => { p.acao = e.target.value; ed.refresh(); side() };
       $('#pdel').onclick = () => { N.postes = N.postes.filter(x => x !== p); N.sel = null; ed.refresh(); side() }
     }
   }
-  side();
-  $('#vol').onclick = () => vNova(app);
+  mount(); side();
+  $('#vol').onclick = () => { if (add) { const id = N.obra.id; NOVA = null; go('obra-' + id) } else vNova(app) };
   $('#add').onclick = () => ed.setPlacing(!ed.placing, 'Clique na planta onde fica o novo poste');
-  $('#ren').onclick = () => { N.postes.sort((a, b) => a.n - b.n).forEach((p, i) => p.n = i + 1); N.sel = null; ed.refresh(); side(); toast('Postes renumerados de 1 a ' + N.postes.length) };
-  ligarTrocaDivisao($('#nf'));
-  $('#salvar').onclick = salvarNova;
+  $('#ren') && ($('#ren').onclick = () => { N.postes.sort((a, b) => (a.f || 0) - (b.f || 0) || a.n - b.n).forEach((p, i) => p.n = i + 1); N.rep = []; N.sel = null; ed.refresh(); side(); toast('Postes renumerados de 1 a ' + N.postes.length) });
+  $('#maisf').onclick = () => escolherPdf(async f => {
+    const sst = $('#sst'); const b = $('#maisf'); b.disabled = true;
+    try {
+      const r = await lerPaginas(f, t => sst.textContent = t);
+      const base = N.folhas.length;
+      const J = juntarPostes(r.pags, N.postes.map(p => p.n).concat(usadosObra), base);
+      r.pags.forEach(pg => N.folhas.push({ png: pg.png, url: pg.url, w: pg.w, h: pg.h }));
+      N.postes.push(...J.postes); N.rep = (N.rep || []).concat(J.rep); N.f = base; N.sel = null;
+      sst.textContent = ''; mount(); side(); toast(`${r.pags.length} folha(s) incluída(s) · ${J.postes.length} poste(s) lido(s)`);
+    } catch (e) { console.error(e); sst.textContent = ''; toast('Não consegui ler este PDF: ' + (e.message || e), 1) }
+    b.disabled = false;
+  });
+  $('#remf').onclick = e => {
+    const b = e.currentTarget;
+    if (!b.dataset.conf) { b.dataset.conf = 1; b.textContent = `Confirmar: remover a folha ${N.f + 1} e os postes dela`; b.style.background = '#fee2e2'; setTimeout(() => { if (b.isConnected) { delete b.dataset.conf; b.textContent = 'Remover esta folha'; b.style.background = '' } }, 4000); return }
+    delete b.dataset.conf; b.textContent = 'Remover esta folha'; b.style.background = '';
+    const f = N.f; N.folhas.splice(f, 1);
+    N.postes = N.postes.filter(p => (p.f || 0) !== f).map(p => (p.f || 0) > f ? { ...p, f: p.f - 1 } : p);
+    N.f = Math.max(0, f - 1); N.sel = null; mount(); side();
+  };
+  if (!add) ligarTrocaDivisao($('#nf'));
+  $('#salvar').onclick = add ? salvarFolhasObra : salvarNova;
 }
 async function salvarNova() {
   const N = NOVA; const v = lerForm($('#nf')); const sst = $('#sst');
@@ -812,14 +924,72 @@ async function salvarNova() {
     let loc = N.loc;
     if (v.municipio && (!loc || loc.src === 'municipio') && v.municipio !== N.campos.municipio) { const c = PRMAP.c.find(z => z[0] === v.municipio); if (c) loc = { lat: c[1], lon: c[2], src: 'municipio' } }
     sst.textContent = 'Preparando arquivos…';
-    const plantaB64 = await blobB64(N.png);
+    const plantaB64 = await blobB64(N.folhas[0].png);
+    const folhas = []; for (const fo of N.folhas.slice(1)) folhas.push({ b64: await blobB64(fo.png), w: fo.w, h: fo.h });
     const pdfB64 = N.file.size < 25e6 ? await blobB64(N.file) : null;
-    sst.textContent = `Enviando para a ${s.div}… (pode levar alguns segundos)`;
-    const obra = Object.assign({}, v, { postes: N.postes.map(p => ({ n: p.n, x: p.x, y: p.y, nota: p.nota || '', acao: p.acao || '', estruturas: p.estruturas || [] })), lat: loc ? loc.lat : '', lon: loc ? loc.lon : '', locOrigem: loc ? loc.src : '' });
-    const j = await api(s, 'empenhar', { obra, planta: { b64: plantaB64, w: N.w, h: N.h }, pdf: pdfB64 ? { b64: pdfB64, nome: N.file.name } : null });
+    sst.textContent = `Enviando para a ${s.div}… (pode levar alguns segundos${folhas.length ? ', são ' + N.folhas.length + ' folhas' : ''})`;
+    const obra = Object.assign({}, v, { postes: N.postes.map(p => ({ n: p.n, x: p.x, y: p.y, nota: p.nota || '', acao: p.acao || '', estruturas: p.estruturas || [], f: p.f || 0 })), lat: loc ? loc.lat : '', lon: loc ? loc.lon : '', locOrigem: loc ? loc.src : '' });
+    const j = await api(s, 'empenhar', { obra, planta: { b64: plantaB64, w: N.folhas[0].w, h: N.folhas[0].h }, folhas, pdf: pdfB64 ? { b64: pdfB64, nome: N.file.name } : null });
     toast('Obra empenhada'); NOVA = null;
     await sincronizar(); go('obra-' + j.id);
-  } catch (e) { console.error(e); btn.disabled = false; sst.textContent = ''; toast(e.rede ? 'Sem conexão. Tente de novo.' : 'Não foi possível salvar: ' + e.message, 1) }
+  } catch (e) { console.error(e); btn.disabled = false; sst.textContent = ''; toast(msgServidor(e), 1) }
+}
+async function salvarFolhasObra() {
+  const N = NOVA; const o = N.obra; const sst = $('#sst'); const btn = $('#salvar');
+  if (!N.folhas.length) { toast('Nenhuma folha para adicionar', 1); return }
+  btn.disabled = true;
+  try {
+    sst.textContent = 'Preparando arquivos…';
+    const folhas = []; for (const fo of N.folhas) folhas.push({ b64: await blobB64(fo.png), w: fo.w, h: fo.h });
+    sst.textContent = 'Enviando…';
+    const j = await api(sessObra(o), 'adicionarFolhas', { id: o.id, folhas, postes: N.postes.map(p => ({ n: p.n, x: p.x, y: p.y, nota: p.nota || '', acao: p.acao || '', estruturas: p.estruturas || [], f: p.f || 0 })) });
+    toast(`${j.folhas} folha(s) e ${j.postes} poste(s) adicionados à obra`); NOVA = null;
+    await sincronizar(); go('obra-' + o.id);
+  } catch (e) { console.error(e); btn.disabled = false; sst.textContent = ''; toast(msgServidor(e), 1) }
+}
+function msgServidor(e) {
+  const m = (e && e.message) || '';
+  if (/tipo inválido|ação desconhecida/.test(m)) return 'O script da planilha está desatualizado: publique o Codigo.gs novo (Implantar → Gerenciar implantações → ✏️ → Nova versão).';
+  return e && e.rede ? 'Sem conexão. Tente de novo.' : 'Não foi possível salvar: ' + m;
+}
+
+/* ---------- fiscalização pela tela da obra (gestão) ---------- */
+const podeFiscalizar = o => ['gestor', 'fiscal'].includes(papelObra(o));
+/** Postes executados que ainda não têm aprovação nem reprovação válida. */
+function aFiscalizar(o) { const I = S.idx[o.id]; const L = []; for (const [k, st] of I.postes) if (st.last && EXEC.has(st.last.tipo) && !st.last.pendente && !fiscPoste(I, k)) L.push(k); return L }
+function fiscalWebHtml(o) {
+  if (!SEL || S.view === 'hobra' || !podeFiscalizar(o)) return '';
+  const I = S.idx[o.id]; const st = I.postes.get(SEL); const f = fiscPoste(I, SEL);
+  if (!st || !st.last || !EXEC.has(st.last.tipo)) return `<div class="note" style="margin-top:8px">A aprovação deste poste aparece depois que a equipe registrar a execução em campo.</div>`;
+  return `<div class="fiscbox" id="fwb"><div class="lbl">Fiscalização deste poste${f ? ` · <span class="chip ${TIPO_CH[f]}">${esc(TIPO_TX[f])}</span>` : ''}</div>
+    <div class="bigbtns"><button class="b1" data-ft="aprovado">✔️ ${f === 'aprovado' ? 'Aprovado' : 'Aprovar · medido'}</button><button class="b3" data-ft="reprovado">✖️ Reprovar</button></div><div id="frep"></div></div>`;
+}
+async function enviarFisc(o, keys, tipo, alt, obs) {
+  const s = sessObra(o); const agora = new Date().toISOString();
+  const regs = keys.map(k => ({ id: uid(), obra: o.id, poste: k, tipo, alt: alt || [], obs: obs || '', dataExec: hoje(), marcadoEm: agora, nome: S.nome || s.responsavel || '', empresa: 'Copel (fiscalização)' }));
+  const j = keys.length === 1 ? await api(s, 'registrar', { registro: regs[0], foto: null }) : await api(s, 'fiscalizarLote', { registros: regs });
+  if (j.encerrada) { toast('Fiscalização concluída: obra encerrada e movida para o Histórico'); await sincronizar(); go('historico'); return }
+  toast(tipo === 'reprovado' ? 'Poste reprovado' : keys.length > 1 ? keys.length + ' postes aprovados' : 'Poste aprovado');
+  await sincronizar();
+}
+function ligarFiscalWeb(o, side) {
+  const box = $('#fwb', side);
+  if (box) {
+    $('[data-ft=aprovado]', box).onclick = async e => { const b = e.currentTarget; b.disabled = true; b.textContent = 'Salvando…'; try { await enviarFisc(o, [SEL], 'aprovado') } catch (err) { toast(msgServidor(err), 1); renderObraSide() } };
+    $('[data-ft=reprovado]', box).onclick = () => {
+      const alt = [];
+      $('#frep').innerHTML = `<label class="f">Motivo da reprovação</label><div class="chips">${MOTIVOS_REP.map(a => `<button data-a="${esc(a)}">${esc(a)}</button>`).join('')}</div><label class="f">Observação</label><textarea class="i" id="frobs"></textarea><button class="btn sm" id="frok" style="margin-top:8px;background:var(--bad);color:#fff" disabled>Confirmar reprovação</button>`;
+      $$('#frep [data-a]').forEach(b => b.onclick = () => { const a = b.dataset.a; const i = alt.indexOf(a); i < 0 ? alt.push(a) : alt.splice(i, 1); b.classList.toggle('on'); $('#frok').disabled = !alt.length });
+      $('#frok').onclick = async e => { const b = e.currentTarget; b.disabled = true; b.textContent = 'Salvando…'; try { await enviarFisc(o, [SEL], 'reprovado', alt, $('#frobs').value.trim()) } catch (err) { toast(msgServidor(err), 1); renderObraSide() } };
+    };
+  }
+  const lote = $('#flote', side);
+  lote && (lote.onclick = async e => {
+    const b = e.currentTarget; const L = aFiscalizar(o); if (!L.length) return;
+    if (!b.dataset.conf) { b.dataset.conf = 1; b.textContent = `Confirmar: aprovar ${L.length} poste(s) como medidos`; return }
+    b.disabled = true; b.textContent = 'Salvando…';
+    try { await enviarFisc(o, L, 'aprovado') } catch (err) { toast(msgServidor(err), 1); renderObraSide() }
+  });
 }
 
 /* ================= CAMPO ================= */
@@ -856,17 +1026,12 @@ function vFobra(app) {
   if (!S.nome) { pedirNome(() => render()); return }
   app.innerHTML = `<div class="fobra"><div class="fbar"><a href="#campo" class="btn sm ghost" style="text-decoration:none">←</a><div style="flex:1;min-width:0"><b>${esc(o.projeto)}</b><div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(o.descricao || '')} · ${esc(o.empreiteira || '')}</div></div>${o.pdf ? `<a class="btn sm ghost" href="${esc(driveVer(o.pdf.id))}" target="_blank" rel="noopener" style="text-decoration:none">PDF</a>` : ''}</div>
    <div id="vw"></div><div class="fbot"><div style="flex:1" id="fsum"></div><button class="btn sm dk" id="novo">+ Poste não previsto</button></div></div>`;
-  const ps = plantaSrc(o);
-  VIEWER = Viewer($('#vw'), {
-    img: ps.src, imgAlt: ps.alt, iw: o.planta.w, ih: o.planta.h, fitMarkers: true, getMarkers: () => markersObra(o),
-    onMarker: k => abrirPoste(o, k),
-    onPlace: p => { VIEWER.setPlacing(false); abrirPoste(o, null, p) }
-  });
-  VIEWER.obraId = o.id;
+  FOLHA = 0;
+  VIEWER = montarPlanta(o, { onMarker: k => abrirPoste(o, k), onPlace: p => { VIEWER.setPlacing(false); abrirPoste(o, null, p) } });
   $('#novo').onclick = () => { VIEWER.setPlacing(!VIEWER.placing, 'Toque na planta onde ficou o poste novo') };
   updFbot();
   const rasc = lsGet('fisc.rascunho', null);
-  if (rasc && rasc.obra === o.id && Date.now() - rasc.t < 20 * 60000) setTimeout(() => abrirPoste(o, rasc.key, rasc.novoPos, rasc), 300);
+  if (rasc && rasc.obra === o.id && Date.now() - rasc.t < 20 * 60000) setTimeout(() => { if (rasc.folha != null) FOLHA = rasc.folha; abrirPoste(o, rasc.key, rasc.novoPos, rasc) }, 300);
 }
 function updFbot() {
   const o = S.obras.find(x => x.id === S.obraId); const el = $('#fsum'); if (!o || !el) return; const I = S.idx[o.id];
@@ -914,7 +1079,8 @@ function abrirPoste(o, key, novoPos, rasc) {
   const F = { tipo: novo ? 'novo' : null, alt: [], obs: '', foto: null, dataExec: hoje(), gps: null };
   if (rasc) { F.tipo = rasc.tipo || F.tipo; F.alt = rasc.alt || []; F.obs = rasc.obs || ''; F.dataExec = rasc.dataExec || F.dataExec }
   // rascunho: se o Android fechar o app enquanto a câmera do celular está aberta, o registro volta preenchido
-  const guardar = () => lsSet('fisc.rascunho', { obra: o.id, key: key || null, novoPos: novoPos || null, tipo: F.tipo, alt: F.alt, obs: F.obs, dataExec: F.dataExec, t: Date.now() });
+  const folhaNovo = rasc && rasc.folha != null ? rasc.folha : FOLHA;
+  const guardar = () => lsSet('fisc.rascunho', { obra: o.id, key: key || null, novoPos: novoPos || null, folha: folhaNovo, tipo: F.tipo, alt: F.alt, obs: F.obs, dataExec: F.dataExec, t: Date.now() });
   const descartar = () => { try { localStorage.removeItem('fisc.rascunho') } catch (e) { } };
   const gpsP = pegarGps().then(g => { F.gps = g; const el = $('#fgps2'); if (el) el.textContent = g ? `GPS do celular: ${g.lat.toFixed(5)}, ${g.lon.toFixed(5)} (±${g.precisao} m)` : 'GPS do celular indisponível. Ative a localização para este app.' });
   const titulo = novo ? 'Poste não previsto' : rotuloPoste(o, key);
@@ -973,7 +1139,7 @@ function abrirPoste(o, key, novoPos, rasc) {
       id: uid(), obra: o.id, poste: novo ? null : key, tipo: F.tipo, alt: F.alt, obs: F.obs.trim(), gps, dataExec: F.dataExec,
       marcadoEm: new Date().toISOString(), nome: S.nome, empresa: empresaCampo(o)
     };
-    if (novo) { reg.x = +novoPos.x.toFixed(5); reg.y = +novoPos.y.toFixed(5) }
+    if (novo) { reg.x = +novoPos.x.toFixed(5); reg.y = +novoPos.y.toFixed(5); reg.folha = folhaNovo }
     const fotoB64 = F.foto ? await blobB64(F.foto.blob) : null;
     const item = { pref: o.pref, registro: reg, fotoB64, fotoLocal: F.foto ? 'data:image/jpeg;base64,' + fotoB64 : null };
     // grava primeiro no aparelho (não se perde), depois tenta enviar
@@ -988,7 +1154,7 @@ function abrirPoste(o, key, novoPos, rasc) {
       else { toast(F.tipo === 'aprovado' ? 'Poste aprovado' : F.tipo === 'reprovado' ? 'Poste reprovado' : 'Registro salvo'); sincronizar() }
     } catch (e) {
       if (e.rede) { toast('Sem sinal: registro guardado no celular e será enviado sozinho.'); setSt('sem conexão', true) }
-      else { await IDB.del('fila:' + reg.id).catch(() => { }); S.fila = S.fila.filter(x => x.registro.id !== reg.id); reindex(); render(true); toast('Não foi possível salvar: ' + e.message, 1) }
+      else { await IDB.del('fila:' + reg.id).catch(() => { }); S.fila = S.fila.filter(x => x.registro.id !== reg.id); reindex(); render(true); toast(msgServidor(e), 1) }
     }
   };
 }
