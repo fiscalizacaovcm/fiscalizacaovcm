@@ -1776,16 +1776,10 @@ async function carimbarPdf(bytes, a) {
 const FLUXO = { src: './fluxo.svg', w: 4048, h: 718 };
 function vFluxo(app) {
   const campo = S.mode === 'campo';
-  app.innerHTML = `<div class="${campo ? 'fhead' : ''}" style="${campo ? '' : 'margin-bottom:12px'}"><div class="${campo ? 'who' : 'card'}" style="${campo ? '' : 'display:flex;align-items:center;gap:12px;flex-wrap:wrap'}">
+  app.innerHTML = `<div class="${campo ? 'fhead' : ''}" style="${campo ? '' : 'margin-bottom:12px'}"><div class="${campo ? 'who' : 'card'}">
      ${campo ? `<div><b>Como funciona o fluxo</b><div class="small muted">Arraste e use + / − para ver os detalhes</div></div><a class="btn sm ghost" href="#campo" style="text-decoration:none">← Voltar</a>`
-      : `<div style="flex:1;min-width:240px"><h2 style="margin:0">Fluxo da fiscalização de obras</h2><div class="small muted">Do PEP liberado ao encerramento: quem faz cada etapa (Gestor, App, Empreiteira e Fiscal). Arraste e use + / − para ver os detalhes.</div></div>
-         <a class="btn sm ghost" href="./docs/Fluxo_Fiscalizacao_de_Obras.png" download style="text-decoration:none">⬇️ Imagem (PNG)</a><a class="btn sm ghost" href="./docs/Fluxo_Fiscalizacao_de_Obras.bpmn" download style="text-decoration:none">⬇️ BPMN (Bizagi)</a>`}</div></div>
-   <div id="fvw" style="height:${campo ? 'calc(100vh - 150px)' : 'calc(100vh - 210px)'};min-height:380px;${campo ? 'margin:0 10px' : ''}"></div>
-   <div class="small muted" style="margin:10px ${campo ? '14px' : '2px'}">
-     <b>Gestor:</b> empenha no SAP, sobe a AES e os PDFs dos projetos e confere os postes ·
-     <b>App:</b> lê AES e PDFs, publica a obra, atualiza o painel, encerra e aplica as assinaturas ·
-     <b>Empreiteira:</b> executa e registra cada poste, corrige reprovados, assina e baixa os documentos ·
-     <b>Fiscal:</b> fiscaliza e aprova os postes, faz a medição final, emite FF e BMD no SAP, envia para assinatura e arquiva.</div>`;
+      : `<h2 style="margin:0">Fluxo da fiscalização de obras</h2><div class="small muted">Do PEP liberado ao encerramento: quem faz cada etapa. Arraste e use + / − para ver os detalhes.</div>`}</div></div>
+   <div id="fvw" style="height:${campo ? 'calc(100vh - 120px)' : 'calc(100vh - 175px)'};min-height:380px;${campo ? 'margin:0 10px' : ''}"></div>`;
   const host = $('#fvw');
   const v = Viewer(host, { img: FLUXO.src, iw: FLUXO.w, ih: FLUXO.h, getMarkers: () => [] });
   // abre com a altura do fluxo preenchendo a tela, a partir do início (arraste para o lado)
