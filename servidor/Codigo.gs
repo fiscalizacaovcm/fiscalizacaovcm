@@ -7,7 +7,7 @@
  * Para atualizar o código depois: Implantar > Gerenciar implantações > ✏️ > Versão: Nova versão > Implantar.
  * NUNCA use "Nova implantação" de novo, porque o endereço muda e o app perde a conexão.
  */
-const VERSAO_SERVIDOR = '1.13';
+const VERSAO_SERVIDOR = '1.14';
 
 const COLS_OBRAS = ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us',
   'empenhoEm', 'prazo', 'status', 'lat', 'lon', 'locOrigem', 'plantaId', 'plantaW', 'plantaH', 'pdfId', 'pdfNome',
@@ -20,7 +20,7 @@ const TIPOS_DOC = ['AES', 'BMD parcial', 'BMD final', 'BMD', 'FF', 'Vistoria', '
 const COLS_ASS = ['id', 'empresa', 'nome', 'cargo', 'imgId', 'pinHash', 'sal', 'criadoEm', 'criadoPor', 'ativo', 'tentativas', 'ultimoUso', 'aceiteTermo'];
 const TERMO_VERSAO = 'termo-v1';
 const COLS_PDE = ['id', 'obra', 'projeto', 'pep', 'municipio', 'empreiteira', 'tipo', 'fiscal', 'postes', 'folhas', 'operacional', 'data', 'horaIni', 'horaFim',
-  'pessoas', 'servicos', 'encarregado', 'telefone', 'obs', 'status', 'numeroPde', 'motivo', 'solicitadoEm', 'solicitadoPor', 'analisadoEm', 'analisadoPor', 'alteradoEm'];
+  'pessoas', 'servicos', 'encarregado', 'telefone', 'obs', 'status', 'numeroPde', 'motivo', 'solicitadoEm', 'solicitadoPor', 'analisadoEm', 'analisadoPor', 'alteradoEm', 'itens'];
 const TIPOS_PDE = ['PDE', 'PLV', 'DEC Voluntário'];
 const COLS_AES = ['id', 'aes', 'emitidaEm', 'orgao', 'empreiteiraAes', 'cnpj', 'empreiteira', 'contrato', 'item', 'progOrc', 'pep', 'pepOdd',
   'tipoObra', 'prazo', 'us', 'custo', 'projeto', 'obra', 'pdfId', 'criadoPor', 'criadoEm', 'alteradoEm'];
@@ -981,6 +981,7 @@ function resumoPde(p) {
 function pdePublico(d) {
   const o = {}; COLS_PDE.forEach(function (k) { o[k] = d[k]; });
   try { o.postes = d.postes ? JSON.parse(d.postes) : []; } catch (e) { o.postes = []; }
+  try { o.itens = d.itens ? JSON.parse(d.itens) : {}; } catch (e) { o.itens = {}; }
   return o;
 }
 function pdes(p, req) {
@@ -1007,7 +1008,7 @@ function solicitarPde(p, req) {
     obra: o.id, projeto: o.projeto, pep: o.pep || '', municipio: o.municipio || '', empreiteira: o.empreiteira, tipo: d.tipo, fiscal: d.fiscal,
     postes: JSON.stringify(d.postes), folhas: d.folhas || '', operacional: d.operacional, data: d.data, horaIni: d.horaIni, horaFim: d.horaFim,
     pessoas: String(Number(d.pessoas)), servicos: d.servicos, encarregado: d.encarregado, telefone: String(d.telefone).replace(/\D/g, ''), obs: d.obs || '',
-    status: 'solicitado', motivo: '', solicitadoEm: agora, solicitadoPor: d.nome || p.responsavel || p.empresa, alteradoEm: agora
+    itens: JSON.stringify(d.itens || {}), status: 'solicitado', motivo: '', solicitadoEm: agora, solicitadoPor: d.nome || p.responsavel || p.empresa, alteradoEm: agora
   };
   let id = d.id, ok = false;
   comTrava(function () {

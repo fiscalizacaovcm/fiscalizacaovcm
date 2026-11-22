@@ -1,7 +1,7 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.15.0';
+const VERSAO_APP = '1.16.0';
 const LIB = {
   pdf: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   pdfw: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
@@ -594,7 +594,7 @@ function montarPlanta(o, opts) {
   const host = hostLimpo('#vw');
   const v = Viewer(host, { img: driveImg(fo.id, W), imgAlt: driveImg2(fo.id, W), iw: fo.w, ih: fo.h, fitMarkers: true, getMarkers: () => { const L = markersObra(o, opts.getSel ? opts.getSel() : null, FOLHA); return opts.decorar ? opts.decorar(L) : L }, onMarker: opts.onMarker, onPlace: opts.onPlace });
   v.obraId = o.id;
-  abasFolhas(host, o.folhas.length, FOLHA, i => `Folha ${i + 1} · ${markersObra(o, null, i).length}`, i => { FOLHA = i; VIEWER = montarPlanta(o, opts) });
+  abasFolhas(host, o.folhas.length, FOLHA, opts.rotulo || (i => `Folha ${i + 1} · ${markersObra(o, null, i).length}`), i => { FOLHA = i; VIEWER = montarPlanta(o, opts) });
   return v;
 }
 /** Leva a planta até o poste (troca de folha se precisar). */
@@ -1928,26 +1928,35 @@ function folhasTx(o, keys) {
   if (!fs.length) return '';
   return fs.length > 1 && fs[fs.length - 1] - fs[0] === fs.length - 1 ? `${fs[0]}-${fs[fs.length - 1]}` : fs.join(', ');
 }
-function servicosSugeridos(o, keys) {
-  return keys.map(k => {
-    if (!k.startsWith('P')) return rotuloPoste(o, k);
-    const p = (o.postes || []).find(p => 'P' + p.n === k); if (!p) return '';
-    const E = p.estruturas || []; const ins = E.filter(x => !x.r).map(x => x.t), ret = E.filter(x => x.r).map(x => x.t);
-    const est = [ins.length && 'instalar ' + ins.join(', '), ret.length && 'retirar ' + ret.join(', ')].filter(Boolean).join(' / ');
-    return `Poste ${p.n}${est ? ': ' + est : p.nota ? ': ' + p.nota : p.acao ? ' (' + p.acao + ')' : ''}`;
-  }).filter(Boolean).join('; ');
+/** Serviços do poste agrupados: retirada e instalação da mesma estrutura (S3 → S4) andam juntas. */
+function gruposPoste(o, key) {
+  const p = key.startsWith('P') ? (o.postes || []).find(p => 'P' + p.n === key) : null;
+  const E = p ? p.estruturas || [] : [];
+  if (!E.length) return [{ id: '*', rot: p ? (p.nota || (p.acao ? p.acao : 'serviços previstos no projeto')) : 'poste não previsto (descrever no complemento)', fixo: true }];
+  const M = new Map();
+  for (const e of E) { const pre = (String(e.t).match(/^[A-Za-z]+/) || ['#'])[0].toUpperCase(); if (!M.has(pre)) M.set(pre, { ret: [], ins: [] }); M.get(pre)[e.r ? 'ret' : 'ins'].push(e.t) }
+  return [...M].map(([pre, g]) => ({ id: pre, rot: [g.ret.length && 'retirar ' + g.ret.join(', '), g.ins.length && 'instalar ' + g.ins.join(', ')].filter(Boolean).join(' → ') }));
+}
+function servicosDeItens(o, keys, itens) {
+  return keys.map(k => { const L = itens[k] || []; return L.length ? `${rotuloPoste(o, k)}: ${L.join('; ')}` : '' }).filter(Boolean).join('\n');
 }
 /* --- Campo: escolher postes na planta --- */
 function iniciarPde(o, base) {
   const sel = new Set(base ? base.postes : []);
+  const multi = o.folhas.length > 1;
   const opts = {
     decorar: L => L.map(m => sel.has(m.key) ? Object.assign({}, m, { cls: (m.cls || '') + ' pdesel' }) : m),
-    onMarker: k => { sel.has(k) ? sel.delete(k) : sel.add(k); VIEWER.refresh(); barra() }
+    rotulo: i => { const n = [...sel].filter(k => folhaDe(o, k) === i).length; return `Folha ${i + 1}${n ? ' · ' + n + ' marcado' + (n > 1 ? 's' : '') : ''}` },
+    onMarker: k => {
+      sel.has(k) ? sel.delete(k) : sel.add(k);
+      if (multi) { const h = $('#vw'), t = $('.ftabs', h); t && t.remove(); abasFolhas(h, o.folhas.length, FOLHA, opts.rotulo, i => { FOLHA = i; VIEWER = montarPlanta(o, opts) }) }
+      VIEWER.refresh(); barra()
+    }
   };
   VIEWER = montarPlanta(o, opts);
   const bot = $('.fbot');
   const barra = () => {
-    bot.innerHTML = `<div style="flex:1"><b>${base ? 'Corrigir pedido' : 'Novo PDE/PLV'}</b><div class="small muted">${sel.size ? sel.size + ' poste(s) marcado(s)' : 'Toque nos postes onde a equipe vai trabalhar'}</div></div>
+    bot.innerHTML = `<div style="flex:1"><b>${base ? 'Corrigir pedido' : 'Novo PDE/PLV'}</b><div class="small muted">${sel.size ? sel.size + ' poste(s) marcado(s)' + (multi ? ' · use as abas para marcar postes das outras folhas' : '') : 'Toque nos postes onde a equipe vai trabalhar' + (multi ? ' (use as abas para trocar de folha)' : '')}</div></div>
       <button class="btn sm ghost" id="pdex">Cancelar</button><button class="btn sm pri" id="pdeok" ${sel.size ? '' : 'disabled'}>Continuar</button>`;
     $('#pdex').onclick = () => render();
     $('#pdeok').onclick = () => formPde(o, [...sel], base);
@@ -1957,7 +1966,10 @@ function iniciarPde(o, base) {
 function formPde(o, keys, base) {
   const s = sessObra(o); const fis = fiscaisDe(s.pref); const ult = lsGet('fisc.pdeUlt', {});
   const v = Object.assign({ tipo: 'PDE', fiscal: ult.fiscal || '', data: amanha(), horaIni: '08:00', horaFim: '17:00', pessoas: '', encarregado: ult.encarregado || S.nome || '', telefone: ult.telefone || lsGet('fisc.tel', ''), operacional: '', obs: '' }, base || {});
-  const servBase = servicosSugeridos(o, keys);
+  const G = Object.fromEntries(keys.map(k => [k, gruposPoste(o, k)]));
+  const bi = base && base.itens && Object.keys(base.itens).length ? base.itens : null;
+  const marcado = (k, g) => g.fixo || !bi || !bi[k] || bi[k].includes(g.rot);
+  const comp0 = bi ? bi._complemento || '' : '';
   const opt = (L, at) => L.map(x => `<option ${x === at ? 'selected' : ''}>${esc(x)}</option>`).join('');
   openLayer(`<div class="ov" id="pdeov" style="align-items:flex-end;padding:0"><div class="sheet" style="width:100%;max-height:92vh;overflow:auto"><div class="grab"></div>
     <div style="display:flex;justify-content:space-between;align-items:center"><h4>${base ? 'Corrigir' : 'Solicitar'} PDE / PLV · ${esc(o.projeto)}</h4><button class="btn sm ghost" id="pfx">Voltar</button></div>
@@ -1968,16 +1980,25 @@ function formPde(o, keys, base) {
     <label class="f">Nº operacional / PS / referência elétrica</label><input class="i" id="pop" value="${esc(v.operacional)}">
     <div class="row2"><div><label class="f">Data dos trabalhos</label><input class="i" id="pdata" type="date" value="${esc(v.data)}"></div><div><label class="f">Pessoas na obra</label><input class="i" id="ppes" type="number" min="1" inputmode="numeric" value="${esc(v.pessoas)}" placeholder="obras + manutenção"></div></div>
     <div class="row2"><div><label class="f">Início</label><select class="i" id="phi">${opt(HORAS, v.horaIni)}</select></div><div><label class="f">Término</label><select class="i" id="phf">${opt(HORAS, v.horaFim)}</select></div></div>
-    <label class="f">Serviços a serem executados</label><textarea class="i" id="pserv" rows="4" placeholder="Descreva TODO o serviço: pontos de aterramento, serviços com linha viva etc.">${esc(base ? v.servicos : servBase)}</textarea>
-    <div class="small muted">Já veio com os postes e as estruturas do projeto. Complete com aterramentos, linha viva etc.</div>
+    <label class="f">O que será feito em cada poste neste dia</label>
+    <div class="small muted">Desmarque o que fica para outro dia (ex.: hoje a troca do poste no PLV, amanhã o transformador no PDE). Retirada e instalação da mesma estrutura andam juntas.</div>
+    <div id="pits">${keys.map(k => `<div class="pit" data-k="${esc(k)}"><b>${esc(rotuloPoste(o, k))}</b> <span class="small muted">· folha ${folhaDe(o, k) + 1}</span>
+      ${G[k].map((g, j) => g.fixo ? `<div class="small" style="padding:4px 0">${esc(g.rot)}</div>` : `<label><input type="checkbox" data-g="${j}" ${marcado(k, g) ? 'checked' : ''}><span>${esc(g.rot)}</span></label>`).join('')}</div>`).join('')}</div>
+    <label class="f">Complemento</label><textarea class="i" id="pcomp" rows="3" placeholder="Pontos de aterramento, serviços com linha viva, desligamentos etc.">${esc(comp0)}</textarea>
     <div class="row2"><div><label class="f">Encarregado</label><input class="i" id="penc" value="${esc(v.encarregado)}"></div><div><label class="f">Telefone do encarregado</label><input class="i" id="ptel" type="tel" inputmode="numeric" value="${esc(v.telefone)}"></div></div>
     <label class="f">Observações</label><input class="i" id="pobs" value="${esc(v.obs)}">
     <label style="display:flex;gap:10px;align-items:flex-start;margin-top:14px;font-size:13.5px"><input type="checkbox" id="ptermo" style="width:22px;height:22px;flex:none;margin-top:1px"><span>Declaro que todas as informações preenchidas acima são fiéis ao projeto que me foi entregue.</span></label>
     <button class="btn pri" id="penv" style="width:100%;margin-top:14px;padding:13px">${base ? 'Reenviar ao fiscal' : 'Enviar ao fiscal'}</button></div></div>`);
   $('#pfx').onclick = closeLayer;
+  const lerItens = () => { const it = {}; keys.forEach(k => { const box = $(`.pit[data-k="${CSS.escape(k)}"]`); it[k] = G[k].filter((g, j) => g.fixo || $(`input[data-g="${j}"]`, box).checked).map(g => g.rot) }); return it };
   $('#penv').onclick = async e => {
+    const itens = lerItens(), comp = $('#pcomp').value.trim();
+    const vazio = keys.filter(k => !itens[k].length);
+    if (vazio.length) return toast(`${vazio.map(k => rotuloPoste(o, k)).join(', ')} sem serviço marcado: marque um serviço ou volte e desmarque o poste`, 1);
+    const servicos = [servicosDeItens(o, keys, itens), comp].filter(Boolean).join('\n');
+    itens._complemento = comp;
     const d = { id: base ? base.id : null, obra: o.id, tipo: $('#ptipo').value, fiscal: $('#pfis').value, postes: keys, folhas: folhasTx(o, keys), operacional: $('#pop').value.trim(), data: $('#pdata').value, horaIni: $('#phi').value, horaFim: $('#phf').value,
-      pessoas: $('#ppes').value, servicos: $('#pserv').value.trim(), encarregado: $('#penc').value.trim(), telefone: $('#ptel').value.replace(/\D/g, ''), obs: $('#pobs').value.trim(), nome: S.nome };
+      pessoas: $('#ppes').value, servicos, itens, encarregado: $('#penc').value.trim(), telefone: $('#ptel').value.replace(/\D/g, ''), obs: $('#pobs').value.trim(), nome: S.nome };
     const falta = [!d.fiscal && 'fiscal', !d.operacional && 'nº operacional', !d.data && 'data', !(+d.pessoas > 0) && 'pessoas', !d.servicos && 'serviços', !d.encarregado && 'encarregado', d.telefone.length < 10 && 'telefone (com DDD)'].filter(Boolean);
     if (falta.length) return toast('Preencha: ' + falta.join(', '), 1);
     if (d.horaFim <= d.horaIni) return toast('O término deve ser depois do início', 1);
@@ -2036,7 +2057,8 @@ function detalhePde(d) {
       ${kv('Postes', `${d.postes.length} · ${esc(o ? d.postes.map(k => rotuloPoste(o, k).replace(/^Poste /, '')).join(', ') : d.postes.join(', '))}`)}${kv('Folha', esc(d.folhas))}${kv('Nº operacional', esc(d.operacional))}
       ${kv('Pessoas', esc(d.pessoas))}${kv('Encarregado', `${esc(d.encarregado)} · <a href="tel:${esc(d.telefone)}">${esc(d.telefone)}</a>`)}${kv('Fiscal', esc(d.fiscal))}${kv('Solicitado', `${dtBR(d.solicitadoEm)} por ${esc(d.solicitadoPor)}`)}
       ${kv('Observações', esc(d.obs))}${d.analisadoEm ? kv('Análise', `${dtBR(d.analisadoEm)} · ${esc(d.analisadoPor)}`) : ''}${d.motivo ? kv('Motivo', esc(d.motivo)) : ''}</div>
-     <label class="f">Serviços a serem executados</label><div class="small" style="white-space:pre-wrap;background:#f4f6f9;border-radius:8px;padding:8px">${esc(d.servicos)}</div>
+     <label class="f">Serviços a serem executados</label>${d.itens && Object.keys(d.itens).some(k => k[0] !== '_') ? `<div class="small" style="background:#f4f6f9;border-radius:8px;padding:8px">${d.postes.map(k => `<div style="margin:2px 0"><b>${esc(o ? rotuloPoste(o, k) : k)}</b>: ${esc((d.itens[k] || []).join('; '))}</div>`).join('')}${d.itens._complemento ? `<div style="margin-top:6px;white-space:pre-wrap"><b>Complemento</b>: ${esc(d.itens._complemento)}</div>` : ''}</div>`
+       : `<div class="small" style="white-space:pre-wrap;background:#f4f6f9;border-radius:8px;padding:8px">${esc(d.servicos)}</div>`}
      ${d.status === 'solicitado' || d.status === 'devolvido' ? `<div style="background:#f4f6f9;border-radius:10px;padding:10px;margin-top:12px">
        <label class="f" style="margin-top:0">Nº do ${esc(d.tipo)} criado no sistema</label><input class="i" id="pnum" placeholder="opcional, para a empreiteira ver">
        <button class="btn pri" id="papr" style="width:100%;margin-top:10px">✔️ Aprovar</button>
