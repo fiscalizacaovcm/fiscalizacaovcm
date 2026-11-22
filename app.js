@@ -312,7 +312,7 @@ function vConta(app) {
   app.innerHTML = `<div class="card" style="max-width:560px;margin:0 auto"><h2>Acesso</h2>
    ${S.sess.map(s => `<div class="acc"><div><b>${esc(s.div)}</b> <span class="chip ${s.papel === 'gestor' ? 'or' : s.papel === 'fiscal' ? 'novo' : ''}">${esc(s.papel)}</span><div class="small muted">${esc(s.empresa)}${s.responsavel ? ' · ' + esc(s.responsavel) : ''}</div></div><button class="btn sm ghost" data-sair="${esc(s.pref)}">Sair</button></div>`).join('')}
    ${souCopel() ? '<button class="btn ghost" id="maisdiv" style="margin-top:12px">+ Conectar outra divisão</button>' : ''}
-   <label class="f" style="margin-top:18px">Seu nome (vai junto com os registros de campo)</label><input class="i" id="nm" value="${esc(S.nome)}">
+   <label class="f" style="margin-top:18px">Seu nome (vai junto com os registros de campo)</label><input class="i" id="nm" value="${esc(S.nome)}">${S.sess.some(s => s.papel === 'empreiteira') ? `<label class="f">Seu telefone (com DDD), usado nos pedidos de PDE/PLV</label><input class="i" id="tl" type="tel" inputmode="numeric" value="${esc(lsGet('fisc.tel', ''))}">` : ''}
    <div style="margin-top:16px" class="small muted">Registros aguardando envio: <b>${S.fila.length}</b>${S.fila.length ? ' <button class="btn sm" id="envf">Enviar agora</button>' : ''}</div>
    <div class="small muted" style="margin-top:6px">Versão do app ${VERSAO_APP}</div></div>`;
   $$('[data-sair]', app).forEach(b => b.onclick = () => {
@@ -322,6 +322,7 @@ function vConta(app) {
   });
   $('#maisdiv') && ($('#maisdiv').onclick = () => vLogin(app, true));
   $('#nm').onchange = e => { S.nome = e.target.value.trim(); lsSet('fisc.nome', S.nome); toast('Nome salvo') };
+  $('#tl') && ($('#tl').onchange = e => { lsSet('fisc.tel', e.target.value.replace(/\D/g, '')); toast('Telefone salvo') });
   $('#envf') && ($('#envf').onclick = () => enviarFila());
 }
 
@@ -1131,9 +1132,10 @@ function ligarFiscalWeb(o, side) {
 function pedirNome(cb) {
   openLayer(`<div class="ov"><div class="box"><h2>Quem está lançando?</h2><p class="small muted" style="margin-top:0">Seu nome fica salvo neste celular e vai junto com cada registro.</p>
    <label class="f">Seu nome / encarregado</label><input class="i" id="eqn" value="${esc(S.nome || '')}">
+   ${S.sess.some(s => s.papel === 'empreiteira') ? `<label class="f">Seu telefone (com DDD)</label><input class="i" id="eqt" type="tel" inputmode="numeric" value="${esc(lsGet('fisc.tel', ''))}" placeholder="usado nos pedidos de PDE/PLV">` : ''}
    <button class="btn pri" id="eqok" style="width:100%;margin-top:16px;padding:12px">Continuar</button></div></div>`);
   setTimeout(() => $('#eqn') && $('#eqn').focus(), 50);
-  $('#eqok').onclick = () => { const nome = $('#eqn').value.trim(); if (!nome) { toast('Informe seu nome', 1); return } S.nome = nome; lsSet('fisc.nome', nome); closeLayer(); cb && cb() };
+  $('#eqok').onclick = () => { const nome = $('#eqn').value.trim(); if (!nome) { toast('Informe seu nome', 1); return } S.nome = nome; lsSet('fisc.nome', nome); if ($('#eqt')) lsSet('fisc.tel', $('#eqt').value.replace(/\D/g, '')); closeLayer(); cb && cb() };
 }
 function vFlist(app) {
   if (!S.nome) { app.innerHTML = ''; pedirNome(() => render()); return }
@@ -1930,7 +1932,7 @@ function iniciarPde(o, base) {
 }
 function formPde(o, keys, base) {
   const s = sessObra(o); const fis = fiscaisDe(s.pref); const ult = lsGet('fisc.pdeUlt', {});
-  const v = Object.assign({ tipo: 'PDE', fiscal: ult.fiscal || '', data: amanha(), horaIni: '08:00', horaFim: '17:00', pessoas: '', encarregado: ult.encarregado || S.nome || '', telefone: ult.telefone || '', operacional: '', obs: '' }, base || {});
+  const v = Object.assign({ tipo: 'PDE', fiscal: ult.fiscal || '', data: amanha(), horaIni: '08:00', horaFim: '17:00', pessoas: '', encarregado: ult.encarregado || S.nome || '', telefone: ult.telefone || lsGet('fisc.tel', ''), operacional: '', obs: '' }, base || {});
   const servBase = servicosSugeridos(o, keys);
   const opt = (L, at) => L.map(x => `<option ${x === at ? 'selected' : ''}>${esc(x)}</option>`).join('');
   openLayer(`<div class="ov" id="pdeov" style="align-items:flex-end;padding:0"><div class="sheet" style="width:100%;max-height:92vh;overflow:auto"><div class="grab"></div>
