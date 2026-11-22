@@ -1700,7 +1700,6 @@ async function vAssinatura(app) {
     if (pad.vazio()) return toast('Desenhe a assinatura', 1);
     if (!/^\d{6}$/.test(pin)) return toast('O PIN deve ter 6 números', 1);
     if (pin !== $('#apin2').value) return toast('Os PINs não conferem', 1);
-    if (/^(\d)\1{5}$/.test(pin) || '0123456789'.includes(pin) || '9876543210'.includes(pin)) return toast('Escolha um PIN menos óbvio', 1);
     if (!$('#atermo').checked) return toast('Leia e aceite o termo', 1);
     const img = pad.png(); if (!img) return toast('Desenhe a assinatura', 1);
     const b = e.currentTarget; b.disabled = true; b.textContent = 'Salvando…';
