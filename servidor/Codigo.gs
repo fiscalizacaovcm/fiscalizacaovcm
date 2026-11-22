@@ -7,7 +7,7 @@
  * Para atualizar o código depois: Implantar > Gerenciar implantações > ✏️ > Versão: Nova versão > Implantar.
  * NUNCA use "Nova implantação" de novo, porque o endereço muda e o app perde a conexão.
  */
-const VERSAO_SERVIDOR = '1.11';
+const VERSAO_SERVIDOR = '1.12';
 
 const COLS_OBRAS = ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us',
   'empenhoEm', 'prazo', 'status', 'lat', 'lon', 'locOrigem', 'plantaId', 'plantaW', 'plantaH', 'pdfId', 'pdfNome',
@@ -179,6 +179,8 @@ function doPost(e) {
       case 'historico': return json(historico(p));
       case 'armazenamento': return json(armazenamento(p));
       case 'obraHistorico': return json(obraHistorico(p, req));
+      case 'pdfObra': return json(pdfObra(p, req));
+      case 'atualizarPlantas': return json(atualizarPlantas(p, req));
       case 'registrar': return json(registrar(p, req));
       case 'fiscalizarLote': return json(fiscalizarLote(p, req));
       case 'adicionarFolhas': return json(adicionarFolhas(p, req));
@@ -1018,5 +1020,33 @@ function cancelarPde(p, req) {
   if (d.status === 'aprovado' && p.papel === 'empreiteira') return { ok: false, erro: 'pedido já aprovado: fale com o fiscal' };
   let ok = false;
   comTrava(function () { ok = atualizarLinha('pde', d.id, { status: 'cancelado', alteradoEm: agoraIso() }); marcarAlteracao(); });
+  return { ok: ok };
+}
+
+/* ============================ refazer as imagens da planta a partir do PDF guardado ============================ */
+function pdfObra(p, req) {
+  if (p.papel === 'empreiteira') return { ok: false, erro: 'sem permissão' };
+  const o = acharObraQualquer(req.id);
+  if (!o || !o.pdfId) return { ok: false, erro: 'o PDF original desta obra não está guardado' };
+  return { ok: true, b64: Utilities.base64Encode(DriveApp.getFileById(o.pdfId).getBlob().getBytes()) };
+}
+function atualizarPlantas(p, req) {
+  if (p.papel !== 'gestor') return { ok: false, erro: 'só o gestor pode alterar a obra' };
+  const o = ler('obras').filter(function (x) { return x.id === req.id; })[0];
+  if (!o) return { ok: false, erro: 'obra não encontrada ou já encerrada' };
+  let folhas = []; try { folhas = o.folhas ? JSON.parse(o.folhas) : []; } catch (e) { }
+  const pasta = DriveApp.getFolderById(lerConfig().pastaPlantas);
+  const campos = {}; const velhos = [];
+  (req.folhas || []).forEach(function (f) {
+    const i = Number(f.i);
+    if (i > folhas.length) return;
+    const arq = pasta.createFile(Utilities.newBlob(Utilities.base64Decode(f.b64), 'image/jpeg', o.id + '_folha' + (i + 1) + '_v' + Date.now() + '.jpg'));
+    if (i === 0) { velhos.push(o.plantaId); campos.plantaId = arq.getId(); campos.plantaW = f.w; campos.plantaH = f.h; }
+    else { velhos.push(folhas[i - 1].id); folhas[i - 1] = { id: arq.getId(), w: f.w, h: f.h }; }
+  });
+  campos.folhas = JSON.stringify(folhas); campos.atualizadoEm = agoraIso();
+  let ok = false;
+  comTrava(function () { ok = atualizarLinha('obras', o.id, campos); marcarAlteracao(); });
+  velhos.forEach(function (id) { try { DriveApp.getFileById(id).setTrashed(true); } catch (e) { } });
   return { ok: ok };
 }

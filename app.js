@@ -1,12 +1,14 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.13.0';
+const VERSAO_APP = '1.14.0';
 const LIB = {
   pdf: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   pdfw: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
   pdflib: './pdf-lib.min.js'
 };
+/* fontes-padrão e cmaps: sem eles o texto em fontes não embutidas (Arial etc.) some da imagem */
+const PDF_OPTS = { isEvalSupported: false, disableFontFace: true, standardFontDataUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/standard_fonts/', cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/', cMapPacked: true };
 const ALTERACOES = ['Poste deslocado', 'Estrutura diferente', 'Altura/esforço do poste diferente', 'Condutor/vão diferente', 'Equipamento diferente', 'Aterramento diferente', 'Outro'];
 const MOTIVOS_REP = ['Estrutura divergente do projeto', 'Poste fora de posição', 'Falta material ou acabamento', 'Segurança / aterramento', 'Foto não comprova', 'Outro'];
 const PENDENCIAS = ['Falta material', 'Impedimento do proprietário', 'Roçada/supressão pendente', 'Interferência (outra rede, via)', 'Condição de terreno/clima', 'Outro'];
@@ -638,7 +640,7 @@ function renderObraSide() {
     <b>OSE</b><span>${esc(o.ose || '—')}</span><b>Projetista</b><span>${esc(o.projetista || '—')}</span><b>Status</b><span>${o.status === 'concluida' ? '<span class="chip ok">concluída</span>' : '<span class="chip or">em andamento</span>'}</span>
    </div>
    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">${o.pdf ? `<a class="btn sm ghost" href="${esc(driveVer(o.pdf.id))}" target="_blank" rel="noopener" style="text-decoration:none">Abrir PDF do projeto</a>` : ''}
-    ${podeEditarObra(o) ? (hist ? `<button class="btn sm dk" id="reab">Reabrir obra</button>` : `<button class="btn sm ghost" id="edob">Editar dados</button><button class="btn sm ghost" id="addf">+ Adicionar folha</button><button class="btn sm dk" id="conc">Encerrar obra (manual)</button>`) : ''}</div></div>
+    ${podeEditarObra(o) ? (hist ? `<button class="btn sm dk" id="reab">Reabrir obra</button>` : `<button class="btn sm ghost" id="edob">Editar dados</button><button class="btn sm ghost" id="addf">+ Adicionar folha</button>${o.pdf ? '<button class="btn sm ghost" id="regp" title="Refaz a imagem da planta a partir do PDF guardado">Refazer imagem da planta</button>' : ''}<button class="btn sm dk" id="conc">Encerrar obra (manual)</button>`) : ''}</div></div>
    <div class="card" ${SEL ? 'style="order:-1"' : ''}><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">${SEL ? esc(rotuloPoste(o, SEL)) : 'Registros de campo'}</h3>${SEL ? `<button class="btn sm ghost" id="clr">Ver todos</button>` : ''}</div>
    ${SEL && SEL.startsWith('P') ? (() => { const p = o.postes.find(p => 'P' + p.n === SEL); return p && (p.estruturas || []).length ? `<div style="margin:8px 0">${estHtml(p)}</div>` : p && p.nota ? `<div class="small muted" style="margin:6px 0">Previsto: ${esc(p.nota)}</div>` : '' })() : ''}
    ${fiscalWebHtml(o)}
@@ -664,6 +666,7 @@ function renderObraSide() {
   ligarFiscalWeb(o, side);
   { const c = document.createElement('div'); c.className = 'card'; c.id = 'docsobra'; side.insertBefore(c, side.children[1] || null); cardDocsObra(o) }
   $('#addf') && ($('#addf').onclick = () => escolherPdf(f => processarPdf(f, o)));
+  $('#regp') && ($('#regp').onclick = e => refazerPlanta(o, e.currentTarget));
 }
 function regHtml(o, r) {
   const key = r.tipo === 'novo' ? 'N:' + r.id : r.poste;
@@ -772,7 +775,7 @@ function casarEmpreiteira(nomeAes, lista) {
 /** Lê o PDF da AES (gerado pelo SAP): cabeçalho e itens (projeto, PEP, US, prazo, custo). */
 async function lerAes(file) {
   const lib = await pdfLib();
-  const doc = await lib.getDocument({ data: new Uint8Array(await file.arrayBuffer()), isEvalSupported: false, disableFontFace: true }).promise;
+  const doc = await lib.getDocument(Object.assign({ data: new Uint8Array(await file.arrayBuffer()) }, PDF_OPTS)).promise;
   const linhas = [];
   for (let i = 1; i <= Math.min(doc.numPages, 5); i++) {
     const pg = await doc.getPage(i); const tc = await pg.getTextContent();
@@ -874,7 +877,7 @@ async function lerPaginas(file, st) {
   st('Carregando leitor de PDF…'); const lib = await pdfLib();
   st('Lendo o projeto…');
   const buf = await file.arrayBuffer();
-  const doc = await lib.getDocument({ data: new Uint8Array(buf.slice(0)), isEvalSupported: false, disableFontFace: true }).promise;
+  const doc = await lib.getDocument(Object.assign({ data: new Uint8Array(buf.slice(0)) }, PDF_OPTS)).promise;
   const n = Math.min(doc.numPages, MAX_FOLHAS); const pags = [];
   for (let i = 1; i <= n; i++) {
     const pre = n > 1 ? `Folha ${i} de ${n}: ` : '';
@@ -1215,7 +1218,7 @@ function abrirPoste(o, key, novoPos, rasc) {
   const titulo = novo ? 'Poste não previsto' : rotuloPoste(o, key);
   openLayer(`<div class="ov" id="shov" style="align-items:flex-end;padding:0"><div class="sheet" style="position:relative;width:100%"><div class="grab"></div>
     <div style="display:flex;justify-content:space-between;align-items:center"><h4>${esc(titulo)}</h4><button class="btn sm ghost" id="shx">Fechar</button></div>
-    ${(pp.estruturas || []).length ? `<div style="margin-top:8px">${estHtml(pp)}</div>` : prev ? `<div class="small" style="margin-top:6px;background:#f4f6f9;border-radius:8px;padding:8px">Previsto: ${esc(prev)}</div>` : ''}
+    ${novo || String(key).startsWith("N:") ? '' : `<div class="oqf"><div class="lbl">O que fazer neste poste</div>${(pp.estruturas || []).length ? estHtml(pp) : ''}${prev && !((pp.estruturas || []).length && /^(Instalar|Retirar|Modificar)\b/i.test(prev)) ? `<div class="small" style="margin-top:${(pp.estruturas || []).length ? 6 : 0}px">${esc(prev)}</div>` : ''}${!(pp.estruturas || []).length && !prev ? `<div class="small muted">${ret ? 'Retirar o poste.' : 'O projeto não trouxe a estrutura deste poste. Confira no PDF (botão no topo).'}</div>` : ''}</div>`}
     ${st && st.last ? `<div class="small" style="margin-top:6px">Situação atual: <span class="chip ${TIPO_CH[st.last.tipo]}">${esc(tipoTx(o, st.last))}</span>${st.last.pendente ? ' <span class="chip">aguardando envio</span>' : ''}</div>` : ''}
     ${fAtual ? `<div class="small" style="margin-top:6px">Fiscalização: <span class="chip ${TIPO_CH[fAtual]}">${esc(TIPO_TX[fAtual])}</span></div>` : ''}
     ${fiscal && executado ? `<div class="fiscbox"><div class="lbl">Fiscalização</div><div class="bigbtns"><button class="b1" data-t="aprovado">✔️ Aprovar · medido</button><button class="b3" data-t="reprovado">✖️ Reprovar</button></div></div>${novo ? '' : '<div class="lbl" style="margin-top:12px">Registrar execução</div>'}` : ''}
@@ -1632,7 +1635,7 @@ async function vDoc(app) {
   $('#dbx') && ($('#dbx').onclick = () => baixarBytes(bytes, j.nome));
   $('#dass') && ($('#dass').onclick = () => posicionarAssinatura(d, s, bytes));
   try {
-    const lib = await pdfLib(); const doc = await lib.getDocument({ data: bytes.slice(0), isEvalSupported: false, disableFontFace: true }).promise;
+    const lib = await pdfLib(); const doc = await lib.getDocument(Object.assign({ data: bytes.slice(0) }, PDF_OPTS)).promise;
     const host = $('#dpages'); const W = Math.min(host.clientWidth || innerWidth, 1100) - 4;
     for (let i = 1; i <= Math.min(doc.numPages, 30); i++) {
       if (S.view !== 'doc') return;
@@ -2012,4 +2015,29 @@ function detalhePde(d) {
   const acao = async (b, req) => { b.disabled = true; try { await api(s, 'analisarPde', Object.assign({ id: d.id }, req)); closeLayer(); toast(req.decisao === 'aprovar' ? 'Pedido aprovado' : 'Pedido devolvido à empreiteira'); await sincronizar(); vPdes($('#app')) } catch (e) { toast(msgServidor(e), 1); b.disabled = false } };
   $('#papr') && ($('#papr').onclick = e => acao(e.currentTarget, { decisao: 'aprovar', numeroPde: $('#pnum').value }));
   $('#pdev') && ($('#pdev').onclick = e => { const m = $('#pmot').value.trim(); if (!m) return toast('Informe o motivo', 1); acao(e.currentTarget, { decisao: 'devolver', motivo: m }) });
+}
+
+/* ================= refazer as imagens da planta a partir do PDF guardado ================= */
+async function refazerPlanta(o, btn) {
+  const t0 = btn.textContent; btn.disabled = true;
+  try {
+    btn.textContent = 'Baixando o PDF…'; const s = sessObra(o);
+    const j = await api(s, 'pdfObra', { id: o.id });
+    btn.textContent = 'Gerando as imagens…';
+    const lib = await pdfLib(); const doc = await lib.getDocument(Object.assign({ data: b64Bytes(j.b64) }, PDF_OPTS)).promise;
+    const n = Math.min(doc.numPages, o.folhas.length); const folhas = [];
+    for (let i = 1; i <= n; i++) {
+      const page = await doc.getPage(i); const v1 = page.getViewport({ scale: 1 });
+      const vp = page.getViewport({ scale: Math.min(3, 2600 / Math.max(v1.width, v1.height)) });
+      const cv = document.createElement('canvas'); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+      const ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+      await page.render({ canvasContext: ctx, viewport: vp }).promise;
+      const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', .86));
+      folhas.push({ i: i - 1, b64: await blobB64(blob), w: cv.width, h: cv.height }); cv.width = cv.height = 1;
+    }
+    btn.textContent = 'Enviando…';
+    await api(s, 'atualizarPlantas', { id: o.id, folhas });
+    toast(`Imagem da planta refeita (${n} folha${n > 1 ? 's' : ''})${o.folhas.length > n ? ' · as folhas que vieram de outro PDF ficaram como estavam' : ''}`);
+    await sincronizar(); VIEWER = null; render();
+  } catch (e) { console.error(e); toast(msgServidor(e), 1); btn.disabled = false; btn.textContent = t0 }
 }
