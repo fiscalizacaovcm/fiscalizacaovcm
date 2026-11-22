@@ -743,7 +743,7 @@
       <outgoing>f15</outgoing>
       <script />
     </scriptTask>
-    <scriptTask id="t_sap" name="Medição final e emissão da FF no SAP">
+    <scriptTask id="t_sap" name="Medição final e emissão do BMD final, FF e vistoria no SAP">
       <extensionElements>
         <bizagi:BizagiExtensions xmlns:bizagi="http://www.bizagi.com/bpmn20">
           <bizagi:BizagiProperties>
@@ -759,7 +759,7 @@
       <outgoing>f16</outgoing>
       <script />
     </scriptTask>
-    <scriptTask id="t_env" name="Enviar a FF (e BMD final / vistoria) no app">
+    <scriptTask id="t_env" name="Enviar BMD final, FF e vistoria no app (os 3 juntos)">
       <extensionElements>
         <bizagi:BizagiExtensions xmlns:bizagi="http://www.bizagi.com/bpmn20">
           <bizagi:BizagiProperties>
@@ -839,7 +839,7 @@
       <incoming>f21</incoming>
       <outgoing>f23</outgoing>
     </userTask>
-    <userTask id="t_parc" name="BMD parcial dos postes já aprovados (opcional, pode haver vários)">
+    <userTask id="t_parc" name="BMD parcial dos postes já aprovados (só o BMD; opcional, pode haver vários)">
       <extensionElements>
         <bizagi:BizagiExtensions xmlns:bizagi="http://www.bizagi.com/bpmn20">
           <bizagi:BizagiProperties>

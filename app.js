@@ -1,7 +1,7 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.14.0';
+const VERSAO_APP = '1.15.0';
 const LIB = {
   pdf: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   pdfw: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
@@ -1568,12 +1568,20 @@ async function cardDocsObra(o) {
   const s = sessObra(o); const pode = s && s.papel !== 'empreiteira'; const hist = S.view === 'hobra';
   const I = S.idx[o.id];
   const aprov = I ? [...I.postes.keys()].filter(k => fiscPoste(I, k) === 'aprovado') : [];
-  const tipos = hist ? ['BMD final', 'FF', 'Vistoria', 'Outro', 'BMD parcial'] : (I && I.etapa === 'medida' ? ['FF', 'BMD parcial', 'Vistoria', 'Outro'] : ['BMD parcial', 'FF', 'Vistoria', 'Outro']);
+  const medida = I && I.etapa === 'medida';
+  const arqBox = (id, rot) => `<div><label class="f" style="margin-top:0">${rot}</label><label class="btn sm ghost" style="display:block;text-align:center;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><input type="file" accept="application/pdf" id="${id}" class="hidden"><span id="${id}n">Escolher PDF</span></label></div>`;
+  const boxParcial = `<div id="fparc" style="background:#f4f6f9;border-radius:10px;padding:10px;margin-top:10px"><b class="small">BMD parcial</b>${arqBox('fpb', 'PDF do BMD parcial')}<div id="dinfo" class="small muted" style="margin-top:8px"></div>
+     <button class="btn sm pri" id="penv" style="width:100%;margin-top:10px" disabled>Enviar BMD parcial para ${esc(o.empreiteira)} assinar</button>
+     <div style="text-align:center;margin-top:8px"><a href="#" class="small" id="vaienc">Encerrar a obra (BMD final, FF e vistoria)</a></div></div>`;
+  const boxEnc = `<div id="fenc" style="background:#f4f6f9;border-radius:10px;padding:10px;margin-top:10px"><b class="small">Encerramento da obra</b>
+     <div class="small muted" style="margin:2px 0 8px">${medida ? 'Todos os postes estão aprovados.' : `<b style="color:var(--bad)">Atenção:</b> ${I ? I.tot - I.fis : ''} poste(s) ainda sem aprovação.`} Envie os três documentos juntos; a obra é encerrada e vai para o Histórico.</div>
+     <div class="row2">${arqBox('feb', 'BMD final')}${arqBox('fef', 'FF')}</div><div style="margin-top:8px">${arqBox('fev', 'Vistoria')}</div>
+     <button class="btn sm pri" id="eenv" style="width:100%;margin-top:10px" disabled>Enviar os 3 e encerrar a obra</button>
+     ${medida ? `<div style="text-align:center;margin-top:8px"><a href="#" class="small" id="vaiparc">Emitir um BMD parcial</a></div>` : ''}</div>`;
+  const boxHist = `<div style="background:#f4f6f9;border-radius:10px;padding:10px;margin-top:10px"><div class="row2"><div><label class="f" style="margin-top:0">Tipo</label><select class="i" id="dtipo">${['BMD final', 'FF', 'Vistoria', 'Outro'].map(t => `<option>${t}</option>`).join('')}</select></div>${arqBox('fhd', 'PDF')}</div>
+     <button class="btn sm pri" id="henv" style="width:100%;margin-top:10px" disabled>Enviar para ${esc(o.empreiteira)} assinar</button></div>`;
   el.innerHTML = `<h3>${hist ? 'Documentos' : 'Medições e documentos'}</h3><div id="dresumo" class="small" style="margin-bottom:6px"></div><div id="dlist" class="small muted">Carregando…</div>
-   ${pode ? `<div style="background:#f4f6f9;border-radius:10px;padding:10px;margin-top:10px"><div class="row2"><div><label class="f" style="margin-top:0">Tipo</label><select class="i" id="dtipo">${tipos.map(t => `<option>${t}</option>`).join('')}</select></div>
-     <div><label class="f" style="margin-top:0">PDF</label><label class="btn sm ghost" style="display:block;text-align:center;cursor:pointer"><input type="file" accept="application/pdf" id="dfile" class="hidden"><span id="dfn">Escolher PDF</span></label></div></div>
-     <div id="dinfo" class="small muted" style="margin-top:8px"></div>
-     <button class="btn sm pri" id="denv" style="width:100%;margin-top:10px" disabled>Enviar para ${esc(o.empreiteira)} assinar</button></div>` : ''}`;
+   ${pode ? (hist ? boxHist : (medida ? boxEnc + boxParcial.replace('id="fparc" style="', 'id="fparc" style="display:none;') : boxParcial + boxEnc.replace('id="fenc" style="', 'id="fenc" style="display:none;'))) : ''}`;
   const c = DOCS_CACHE[o.id]; let L, erro;
   if (c && Date.now() - c.t < 30000) ({ L, erro } = c); else { ({ L, erro } = await listarDocs({ obra: o.id, pref: o.pref })); if (!erro) DOCS_CACHE[o.id] = { t: Date.now(), L, erro } }
   const dl = $('#dlist'); if (!dl || getObra(S.obraId) !== o) return;
@@ -1586,33 +1594,49 @@ async function cardDocsObra(o) {
     ? `${parciais.length ? `<b>${parciais.length}</b> BMD parcial(is) emitido(s) · ` : ''}<b>${novos.length}</b> poste(s) aprovado(s) ainda sem BMD${novos.length ? ` (≈ ${fmtUs(Math.max(0, I.usMed - usUlt))} US)` : ''}`
     : '<span class="muted">Assim que o fiscal aprovar postes, já dá para emitir o BMD parcial.</span>';
   dl.innerHTML = erro && !L.length ? esc(erro) : L.length ? L.map(d => `<div class="docrow" data-dv="${esc(d.id)}"><div style="flex:1;min-width:0"><b>${esc(nomeDoc(d))}</b> ${DOC_ST(d)}<div class="small muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${dBR(String(d.enviadoEm).slice(0, 10))}${medTx(d)} · ${esc(d.nome)}${d.assinadoPor ? ' · ' + esc(d.assinadoPor) : ''}</div></div>
-    ${d.status === 'assinado' ? `<button class="btn sm pri" data-dl="${esc(d.id)}" data-v="assinado">Baixar</button>` : pode ? `<button class="btn sm ghost" data-drm="${esc(d.id)}">Remover</button>` : ''}</div>`).join('') : (hist ? 'Nenhum documento enviado.' : 'Nenhum BMD ou documento enviado ainda.');
+    ${d.status === 'assinado' ? `<button class="btn sm pri" data-dl="${esc(d.id)}" data-v="assinado">Baixar</button>` : pode && d.tipo !== 'AES' ? `<button class="btn sm ghost" data-drm="${esc(d.id)}">Remover</button>` : ''}</div>`).join('') : (hist ? 'Nenhum documento enviado.' : 'Nenhum BMD ou documento enviado ainda.');
   dl.classList.toggle('muted', !L.length);
   ligarDocBtns(el, L);
   if (!pode) return;
-  let arq = null;
-  const info = () => {
-    const t = $('#dtipo').value; const b = $('#denv'); delete b.dataset.conf;
-    b.textContent = t === 'FF' && !hist ? 'Enviar FF e encerrar a obra' : 'Enviar para ' + o.empreiteira + ' assinar'; b.style.background = '';
-    $('#dinfo').innerHTML = t === 'BMD parcial' && I ? `Este será o <b>BMD parcial nº ${parciais.length + 1}</b>: ${novos.length} poste(s) aprovado(s) desde o anterior · total aprovado ${aprov.length} poste(s), ${fmtUs(I.usMed)} US.`
-      : t === 'FF' && !hist && I ? (I.etapa === 'medida' ? 'Todos os postes estão aprovados. Ao enviar a FF a obra é encerrada e vai para o Histórico.' : `<b style="color:var(--bad)">Atenção:</b> ${I.tot - I.fis} poste(s) ainda sem aprovação. Ao enviar a FF a obra é encerrada mesmo assim.`)
-      : t === 'BMD final' ? 'BMD final, emitido depois da FF.' : '';
-  };
-  $('#dtipo').onchange = info; info();
-  $('#dfile').onchange = e => { arq = e.target.files[0] || null; $('#dfn').textContent = arq ? arq.name : 'Escolher PDF'; $('#denv').disabled = !arq };
-  $('#denv').onclick = async e => {
-    const b = e.currentTarget; if (!arq) return; if (arq.size > 20e6) { toast('PDF muito grande (máx. 20 MB)', 1); return }
-    const t = $('#dtipo').value;
-    if (t === 'FF' && !hist && !b.dataset.conf) { b.dataset.conf = 1; b.textContent = 'Confirmar: enviar a FF e encerrar'; b.style.background = 'var(--bad)'; return }
-    b.disabled = true; b.textContent = 'Enviando…';
+  const arqs = {};
+  const ligarArq = (id, cb) => { const i = $('#' + id); if (!i) return; i.onchange = e => { arqs[id] = e.target.files[0] || null; $('#' + id + 'n').textContent = arqs[id] ? arqs[id].name : 'Escolher PDF'; cb() } };
+  const grande = f => f && f.size > 20e6;
+  const fim = async (msg) => { delete DOCS_CACHE[o.id]; toast(msg); await sincronizar() };
+  if (hist) {
+    ligarArq('fhd', () => $('#henv').disabled = !arqs.fhd);
+    $('#henv').onclick = async e => {
+      const b = e.currentTarget; if (grande(arqs.fhd)) return toast('PDF muito grande (máx. 20 MB)', 1); b.disabled = true; b.textContent = 'Enviando…';
+      try { await api(s, 'enviarDocumento', { obra: o.id, tipo: $('#dtipo').value, pdf: { b64: await blobB64(arqs.fhd), nome: arqs.fhd.name } }); await fim('Documento enviado: a empreiteira já pode assinar'); cardDocsObra(o) }
+      catch (err) { toast(msgServidor(err), 1); b.disabled = false; b.textContent = 'Enviar para ' + o.empreiteira + ' assinar' }
+    };
+    return;
+  }
+  // BMD parcial
+  if (I) $('#dinfo').innerHTML = `Este será o <b>BMD parcial nº ${parciais.length + 1}</b>: ${novos.length} poste(s) aprovado(s) desde o anterior · total aprovado ${aprov.length} poste(s), ${fmtUs(I.usMed)} US.`;
+  ligarArq('fpb', () => $('#penv').disabled = !arqs.fpb);
+  $('#penv').onclick = async e => {
+    const b = e.currentTarget; if (grande(arqs.fpb)) return toast('PDF muito grande (máx. 20 MB)', 1); b.disabled = true; b.textContent = 'Enviando…';
     try {
-      const extra = t === 'BMD parcial' && I ? { medicao: { postes: aprov, qtd: aprov.length, us: +I.usMed.toFixed(3), novos: novos.length } } : {};
-      const j = await api(s, 'enviarDocumento', Object.assign({ obra: o.id, tipo: t, pdf: { b64: await blobB64(arq), nome: arq.name } }, extra));
-      delete DOCS_CACHE[o.id];
-      if (j.encerrada) { toast('FF enviada: obra encerrada e movida para o Histórico'); await sincronizar(); go('historico'); return }
-      toast(t === 'BMD parcial' ? `BMD parcial nº ${j.documento.parcial} enviado para assinatura` : 'Documento enviado: a empreiteira já pode assinar'); sincronizar(); cardDocsObra(o);
-    } catch (err) { toast(msgServidor(err), 1); b.disabled = false; info() }
+      const j = await api(s, 'enviarDocumento', { obra: o.id, tipo: 'BMD parcial', pdf: { b64: await blobB64(arqs.fpb), nome: arqs.fpb.name }, medicao: I ? { postes: aprov, qtd: aprov.length, us: +I.usMed.toFixed(3), novos: novos.length } : null });
+      await fim(`BMD parcial nº ${j.documento.parcial} enviado para assinatura`); cardDocsObra(o);
+    } catch (err) { toast(msgServidor(err), 1); b.disabled = false; b.textContent = 'Enviar BMD parcial para ' + o.empreiteira + ' assinar' }
   };
+  // encerramento: BMD final + FF + Vistoria
+  const okEnc = () => $('#eenv').disabled = !(arqs.feb && arqs.fef && arqs.fev);
+  ['feb', 'fef', 'fev'].forEach(id => ligarArq(id, okEnc));
+  $('#eenv').onclick = async e => {
+    const b = e.currentTarget; if ([arqs.feb, arqs.fef, arqs.fev].some(grande)) return toast('Algum PDF passou de 20 MB', 1);
+    if (!medida && !b.dataset.conf) { b.dataset.conf = 1; b.textContent = 'Confirmar: encerrar com postes sem aprovação'; b.style.background = 'var(--bad)'; return }
+    b.disabled = true; b.textContent = 'Enviando os 3 documentos…';
+    try {
+      const pdf = async f => ({ b64: await blobB64(f), nome: f.name });
+      await api(s, 'encerramentoDocs', { obra: o.id, docs: { bmd: await pdf(arqs.feb), ff: await pdf(arqs.fef), vistoria: await pdf(arqs.fev) } });
+      await fim('BMD final, FF e vistoria enviados: obra encerrada e movida para o Histórico'); go('historico');
+    } catch (err) { toast(msgServidor(err), 1); b.disabled = false; b.style.background = ''; delete b.dataset.conf; b.textContent = 'Enviar os 3 e encerrar a obra' }
+  };
+  const troca = (mostra, esconde) => ev => { ev.preventDefault(); $('#' + mostra).style.display = ''; $('#' + esconde).style.display = 'none' };
+  $('#vaienc') && ($('#vaienc').onclick = troca('fenc', 'fparc'));
+  $('#vaiparc') && ($('#vaiparc').onclick = troca('fparc', 'fenc'));
 }
 /* Empreiteira: lista para assinar */
 async function vAssinar(app) {
@@ -1824,7 +1848,7 @@ async function carimbarPdf(bytes, a) {
 }
 
 /* ================= fluxo do processo (BPMN) ================= */
-const FLUXO = { src: './fluxo.svg?v=3', w: 4228, h: 718 };
+const FLUXO = { src: './fluxo.svg?v=4', w: 4228, h: 718 };
 function vFluxo(app) {
   const campo = S.mode === 'campo';
   app.innerHTML = `<div class="${campo ? 'fhead' : ''}" style="${campo ? '' : 'margin-bottom:12px'}"><div class="${campo ? 'who' : 'card'}">

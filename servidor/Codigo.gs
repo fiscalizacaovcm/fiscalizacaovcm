@@ -7,7 +7,7 @@
  * Para atualizar o código depois: Implantar > Gerenciar implantações > ✏️ > Versão: Nova versão > Implantar.
  * NUNCA use "Nova implantação" de novo, porque o endereço muda e o app perde a conexão.
  */
-const VERSAO_SERVIDOR = '1.12';
+const VERSAO_SERVIDOR = '1.13';
 
 const COLS_OBRAS = ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us',
   'empenhoEm', 'prazo', 'status', 'lat', 'lon', 'locOrigem', 'plantaId', 'plantaW', 'plantaH', 'pdfId', 'pdfNome',
@@ -187,6 +187,7 @@ function doPost(e) {
       case 'invalidar': return json(invalidar(p, req));
       case 'documentos': return json(documentos(p, req));
       case 'enviarDocumento': return json(enviarDocumento(p, req));
+      case 'encerramentoDocs': return json(encerramentoDocs(p, req));
       case 'docPdf': return json(docPdf(p, req));
       case 'assinarDocumento': return json(assinarDocumento(p, req));
       case 'removerDocumento': return json(removerDocumento(p, req));
@@ -754,6 +755,30 @@ function enviarDocumento(p, req) {
     marcarAlteracao();
   });
   return { ok: true, documento: docPublico(linha), encerrada: encerrada };
+}
+/** Encerramento: BMD final + FF + Vistoria juntos; a obra vai para o histórico. */
+function encerramentoDocs(p, req) {
+  if (p.papel === 'empreiteira') return { ok: false, erro: 'só a Copel envia documentos para assinatura' };
+  const o = ler('obras').filter(function (x) { return x.id === req.obra; })[0];
+  if (!o) return { ok: false, erro: 'obra não encontrada ou já encerrada' };
+  const D = req.docs || {}; const tipos = [['bmd', 'BMD final'], ['vistoria', 'Vistoria'], ['ff', 'FF']];
+  const falta = tipos.filter(function (t) { return !D[t[0]] || !D[t[0]].b64; }).map(function (t) { return t[1]; });
+  if (falta.length) return { ok: false, erro: 'faltam: ' + falta.join(', ') };
+  const agora = agoraIso(); const pasta = pastaDocs();
+  const linhas = tipos.map(function (t, i) {
+    const bytes = Utilities.base64Decode(D[t[0]].b64);
+    const id = 'D' + Date.now().toString(36) + i + Math.floor(Math.random() * 1e4).toString(36);
+    const arq = pasta.createFile(Utilities.newBlob(bytes, 'application/pdf', o.projeto + '_' + t[1].replace(' ', '_') + '_' + id + '.pdf'));
+    return { id: id, obra: o.id, projeto: o.projeto, pep: o.pep || '', empreiteira: o.empreiteira, tipo: t[1], nome: D[t[0]].nome || (t[1] + '_' + o.projeto + '.pdf'),
+      pdfId: arq.getId(), hash: sha256(bytes), enviadoPor: p.responsavel || p.papel, enviadoEm: agora, status: 'aguardando', alteradoEm: agora, parcial: '', medicao: '', aes: '' };
+  });
+  let encerrada = false;
+  comTrava(function () {
+    linhas.forEach(function (l) { anexar('documentos', l); });
+    encerrada = encerrarObra(o.id, 'BMD final, FF e vistoria enviados · ' + (p.responsavel || p.papel));
+    marcarAlteracao();
+  });
+  return { ok: true, encerrada: encerrada, documentos: linhas.map(docPublico) };
 }
 function docPdf(p, req) {
   const d = docsVisiveis(p).filter(function (x) { return x.id === req.id; })[0];
