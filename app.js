@@ -934,7 +934,14 @@ async function processarPdf(file, obraAdd) {
       postes: J.postes, rep: J.rep, total, ignoradas,
       campos: { ...campos, municipio, empenhoEm: hoje(), pref: obraAdd ? obraAdd.pref : (S.divFiltro && divs.some(s => s.pref === S.divFiltro) ? S.divFiltro : (divs[0] || {}).pref) }, loc, utm, sel: null, divs
     };
-    if (!obraAdd) aplicarAes(NOVA);
+    if (!obraAdd) {
+      // número do projeto: vem do carimbo; o nome do arquivo serve de reserva e de conferência
+      const doNome = (file.name.match(/(?:^|\D)(\d{6,8})(?=\D|$)/) || [])[1] || '';
+      const doPdf = String(NOVA.campos.projeto || '').replace(/\D/g, '');
+      if (!doPdf && doNome) { NOVA.campos.projeto = doNome; NOVA.origemProjeto = 'nome' }
+      else if (doPdf && doNome && doPdf !== doNome) NOVA.avisoProjeto = `O carimbo diz projeto ${doPdf}, mas o nome do arquivo tem ${doNome}. Confira qual é o certo.`;
+      aplicarAes(NOVA);
+    }
     closeLayer();
     if (obraAdd) go('nova'); else editorNova();
   } catch (e) { console.error(e); st('Não consegui ler este PDF: ' + (e.message || e)); toast('Erro ao ler o PDF', 1); if (obraAdd) setTimeout(closeLayer, 3500) }
@@ -965,6 +972,7 @@ function editorNova() {
     ${ja ? `<div class="note" style="margin-top:10px">Já existe uma obra com o projeto ${esc(ja.projeto)}. Salvar vai criar outra obra separada. Para incluir folhas numa obra que já existe, abra a obra e use “+ Adicionar folha”.</div>` : ''}
     ${add ? `<div class="note" style="margin-top:10px;background:#f4f6f9;border-color:var(--ln);color:var(--tx)">As folhas e os postes daqui vão ser acrescentados à obra ${esc(N.obra.projeto)} (hoje com ${N.obra.folhas.length} folha${N.obra.folhas.length > 1 ? 's' : ''} e ${(N.obra.postes || []).length} postes). Número de poste que já existe na obra não é repetido.${N.ignoradas ? ` ${N.ignoradas} folha(s) do PDF já estavam na obra e foram ignoradas.` : ''}</div>`
       : `<div class="note" style="margin-top:10px;background:#f4f6f9;border-color:var(--ln);color:var(--tx)">Localização: ${N.loc ? (N.loc.src === 'utm' ? `coordenada UTM do desenho (${fmt1(N.utm.e)}, ${fmt1(N.utm.n)})` : N.loc.src === 'coordenada' ? `coordenada do desenho (${N.loc.lat}, ${N.loc.lon})` : `centro do município de ${esc(N.campos.municipio)}`) : 'não encontrada no PDF. Informe o município ou ela virá do GPS dos registros.'}</div>`}
+    ${N.avisoProjeto ? `<div class="note" style="margin-top:10px;background:#fee2e2;border-color:#fecaca;color:#991b1b">⚠️ ${esc(N.avisoProjeto)}</div>` : ''}${N.origemProjeto === 'nome' ? `<div class="note" style="margin-top:10px">O carimbo não trouxe o número do projeto; usei o do nome do arquivo (${esc(N.campos.projeto)}).</div>` : ''}
     ${add ? '' : `<div id="aesnote">${aesNotaHtml(N)}</div>`}
     <div id="nf" class="${add ? 'hidden' : ''}">${add ? '' : formCampos(N.campos, emps, N.divs)}</div>
     <button class="btn pri" id="salvar" style="width:100%;margin-top:16px;padding:12px">${add ? 'Adicionar à obra' : 'Empenhar obra'}</button>
