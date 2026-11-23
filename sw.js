@@ -1,6 +1,6 @@
 /* Service worker · Fiscalização de Obras
  * Ao publicar uma versão nova do app, troque o número abaixo para os celulares atualizarem. */
-const VERSAO = 'v30';
+const VERSAO = 'v31';
 const APP = 'fisc-app-' + VERSAO;
 const IMGS = 'fisc-imgs';
 const ARQUIVOS = ['./', 'index.html', 'app.js', 'config.js', 'prmap.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];

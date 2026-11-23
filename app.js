@@ -2,13 +2,16 @@
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
 const VERSAO_APP = '1.16.0';
+/* base do pdf.js: cdnjs por padrão (GitHub Pages); o pacote local define CFG.pdfjsBase
+   para servir tudo do disco e não depender de liberar a CDN na rede. */
+const PDFJS_BASE = CFG.pdfjsBase || 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
 const LIB = {
-  pdf: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
-  pdfw: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
+  pdf: PDFJS_BASE + 'pdf.min.js',
+  pdfw: PDFJS_BASE + 'pdf.worker.min.js',
   pdflib: './pdf-lib.min.js'
 };
 /* fontes-padrão e cmaps: sem eles o texto em fontes não embutidas (Arial etc.) some da imagem */
-const PDF_OPTS = { isEvalSupported: false, disableFontFace: true, standardFontDataUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/standard_fonts/', cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/', cMapPacked: true };
+const PDF_OPTS = { isEvalSupported: false, disableFontFace: true, standardFontDataUrl: PDFJS_BASE + 'standard_fonts/', cMapUrl: PDFJS_BASE + 'cmaps/', cMapPacked: true };
 const ALTERACOES = ['Poste deslocado', 'Estrutura diferente', 'Altura/esforço do poste diferente', 'Condutor/vão diferente', 'Equipamento diferente', 'Aterramento diferente', 'Outro'];
 const MOTIVOS_REP = ['Estrutura divergente do projeto', 'Poste fora de posição', 'Falta material ou acabamento', 'Segurança / aterramento', 'Foto não comprova', 'Outro'];
 const PENDENCIAS = ['Falta material', 'Impedimento do proprietário', 'Roçada/supressão pendente', 'Interferência (outra rede, via)', 'Condição de terreno/clima', 'Outro'];
