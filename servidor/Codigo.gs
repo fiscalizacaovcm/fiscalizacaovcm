@@ -1076,3 +1076,38 @@ function atualizarPlantas(p, req) {
   velhos.forEach(function (id) { try { DriveApp.getFileById(id).setTrashed(true); } catch (e) { } });
   return { ok: ok };
 }
+
+/** LIMPEZA PARA DEMO — rode UMA vez pelo editor do Apps Script (selecione
+ * limparParaDemo no topo e clique em Executar; autorize se pedir).
+ * Apaga obras, registros, históricos, documentos, AES e PDE, e manda os
+ * arquivos do Drive (plantas, PDFs, fotos) para a LIXEIRA (reversível por 30 dias).
+ * MANTÉM: chaves, config e assinantes (assinaturas já cadastradas).
+ * Para zerar também as assinaturas, acrescente 'assinantes' na lista LIMPAR. */
+function limparParaDemo() {
+  var LIMPAR = ['obras', 'registros', 'obras_historico', 'registros_historico', 'documentos', 'aes', 'pde']; // + 'assinantes'
+  var ss = SpreadsheetApp.getActive();
+  var relato = [];
+  LIMPAR.forEach(function (nome) {
+    var sh = ss.getSheetByName(nome);
+    if (!sh) return;
+    var n = sh.getLastRow() - 1;      // tira o cabeçalho da conta
+    if (n > 0) sh.deleteRows(2, n);   // apaga só os dados; linha 1 (cabeçalho) fica
+    relato.push(nome + ': ' + Math.max(0, n) + ' linha(s) apagada(s)');
+  });
+  var cfg = {};
+  var cs = ss.getSheetByName('config');
+  if (cs && cs.getLastRow() > 1) cs.getRange(2, 1, cs.getLastRow() - 1, 2).getValues()
+    .forEach(function (r) { if (r[0]) cfg[r[0]] = String(r[1]); });
+  ['pastaPlantas', 'pastaPdfs', 'pastaFotos'].forEach(function (k) {
+    if (!cfg[k]) return;
+    var apagados = 0;
+    try {
+      var fs = DriveApp.getFolderById(cfg[k]).getFiles();
+      while (fs.hasNext()) { fs.next().setTrashed(true); apagados++; }
+      relato.push(k + ': ' + apagados + ' arquivo(s) para a lixeira');
+    } catch (e) { relato.push(k + ': ERRO ' + e); }
+  });
+  try { PropertiesService.getScriptProperties().setProperty('ult', new Date().toISOString()); } catch (e) { }
+  Logger.log(relato.join('\n'));
+  return relato.join(' | ');
+}
