@@ -7,7 +7,7 @@
  * Para atualizar o código depois: Implantar > Gerenciar implantações > ✏️ > Versão: Nova versão > Implantar.
  * NUNCA use "Nova implantação" de novo, porque o endereço muda e o app perde a conexão.
  */
-const VERSAO_SERVIDOR = '1.14';
+const VERSAO_SERVIDOR = '1.15';
 
 const COLS_OBRAS = ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us',
   'empenhoEm', 'prazo', 'status', 'lat', 'lon', 'locOrigem', 'plantaId', 'plantaW', 'plantaH', 'pdfId', 'pdfNome',
@@ -159,7 +159,13 @@ function mostrarPastas() {
 
 /* ============================ entrada HTTP ============================ */
 function doGet(e) {
-  return json({ ok: true, app: 'fiscalizacao', versao: VERSAO_SERVIDOR, divisao: lerConfig().divisao || null });
+  var ss = SpreadsheetApp.getActive();
+  var obras = ss.getSheetByName('obras');
+  return json({
+    ok: true, app: 'fiscalizacao', versao: VERSAO_SERVIDOR, divisao: lerConfig().divisao || null,
+    planilhaId: ss.getId(), planilhaNome: ss.getName(),
+    obras: obras ? Math.max(0, obras.getLastRow() - 1) : 0
+  });
 }
 
 function doPost(e) {
