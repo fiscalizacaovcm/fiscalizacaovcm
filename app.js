@@ -1495,8 +1495,22 @@ function mostrarInstalar(el) {
 }
 
 /* ================= início ================= */
+/* Aviso de ambiente: o pacote de homologação define CFG.ambiente='homologacao'
+   para pintar o cabeçalho e marcar o título, evitando lançar dado achando que é produção. */
+function aplicarAmbiente() {
+  const a = CFG.ambiente; if (!a) return;
+  const nome = CFG.ambienteLabel || String(a).toUpperCase();
+  document.body.classList.add('amb');
+  const st = document.createElement('style');
+  st.textContent = '.amb .top{background:#9a3412}.ambtag{background:#f59e0b;color:#3a2200;font-weight:800;font-size:11px;padding:2px 8px;border-radius:999px;margin-left:8px;letter-spacing:.02em;white-space:nowrap}';
+  document.head.appendChild(st);
+  const b = document.querySelector('#topo .brand');
+  if (b && !b.querySelector('.ambtag')) { const t = document.createElement('span'); t.className = 'ambtag'; t.textContent = nome; b.appendChild(t); }
+  document.title = '[' + nome + '] ' + document.title;
+}
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
 (async () => {
+  aplicarAmbiente();
   // mostra o que já está no aparelho, depois atualiza
   for (const s of S.sess) { const raw = await carregarRaw(s.pref); if (raw.desde || Object.keys(raw.obras).length) S.carregado = true }
   montar(); await carregarFila(); reindex();
