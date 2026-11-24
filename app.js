@@ -1,7 +1,7 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.16.0';
+const VERSAO_APP = '1.17.0';
 /* base do pdf.js: cdnjs por padrão (GitHub Pages); o pacote local define CFG.pdfjsBase
    para servir tudo do disco e não depender de liberar a CDN na rede. */
 const PDFJS_BASE = CFG.pdfjsBase || 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
@@ -145,6 +145,7 @@ async function sincronizar(op) {
       const d = await api(s, 'dados', raw.desde && !completo ? { desde: raw.desde } : {});
       if (d.docs && JSON.stringify(d.docs) !== JSON.stringify(raw.docs)) { raw.docs = d.docs; mudou = true }
       if (d.pde && JSON.stringify(d.pde) !== JSON.stringify(raw.pde)) { raw.pde = d.pde; mudou = true }
+      if (d.sim && JSON.stringify(d.sim) !== JSON.stringify(raw.sim)) { raw.sim = d.sim; mudou = true }
       if (Array.isArray(d.fiscais)) raw.fiscais = d.fiscais;
       if (aplicar(raw, d)) mudou = true;
       IDB.set('cache:' + s.pref, raw).catch(() => { });
@@ -233,6 +234,23 @@ function fechar(o, I) {
   for (const p of (o.postes || [])) { const f = fiscPoste(I, 'P' + p.n); if (f === 'aprovado') fis++; else if (f === 'reprovado') rep++ }
   for (const n of I.novos) { const f = fiscPoste(I, n.key); if (f === 'reprovado') rep++ }
   I.fis = fis; I.rep = rep; I.pctFis = tot ? fis / tot : 0; I.usMed = (o.us || 0) * I.pctFis;
+  // US real por poste (simulacao_ps): substitui a média quando o projeto já tem a importação
+  const sm = simObra(o); I.sim = sm || null;
+  if (sm) {
+    const up = n => Number(sm.postes[String(n)]) || 0;
+    let ex = 0, md = 0;
+    for (const p of (o.postes || [])) {
+      const key = 'P' + p.n, st = I.postes.get(key), t = st && st.last ? st.last.tipo : null;
+      if (t && EXEC.has(t)) ex += up(p.n);
+      if (fiscPoste(I, key) === 'aprovado') md += up(p.n);
+    }
+    I.usPrev = sm.us_prevista; I.usMob = sm.us_mobilizacao; I.usCampoPrev = sm.us_campo;
+    I.usExec = ex; I.usMedCampo = md;
+    I.encerr = (o.status === 'concluida');
+    I.usMed = md + (I.encerr ? sm.us_mobilizacao : 0);  // mobilização entra na medição só no encerramento (FF)
+  } else {
+    I.usPrev = o.us || 0; I.usMob = 0; I.usCampoPrev = o.us || 0; I.usMedCampo = I.usMed; I.encerr = false;
+  }
   I.etapa = I.exec === 0 ? 'empenhada' : I.exec < tot ? 'execucao' : (tot && fis >= tot ? 'medida' : 'executada');
   I.pend = I.regs.filter(r => r.pendente).length;
   const gps = I.regs.filter(r => r.gps && !r.invalido && r.gps.lat != null);
@@ -248,6 +266,8 @@ function reindex() {
   S.idx = idx;
 }
 const getObra = id => S.obras.find(x => x.id === id) || (S.hist && S.hist.obra.id === id ? S.hist.obra : null);
+/** Dados do simulacao_ps (US por poste) da obra, do cache da divisão. */
+const simObra = o => { const r = o && S.raw[o.pref]; return (r && r.sim && r.sim[String(o.projeto)]) || null; };
 function posObra(o) { if (o.lat != null && o.lon != null) return { lat: o.lat, lon: o.lon }; const I = S.idx[o.id]; return I && I.gps ? I.gps : null }
 function fiscPoste(I, key) {
   const st = I && I.postes.get(key); if (!st || !st.fisc || !st.last || !EXEC.has(st.last.tipo)) return '';
@@ -387,17 +407,17 @@ function ligarFiltroDiv() { $('#fdiv') && ($('#fdiv').onchange = e => { S.divFil
 function vPainel(app) {
   const base = obrasVisiveis();
   const ativas = base.filter(o => o.status !== 'concluida' && o.status !== 'cancelada');
-  let us = 0, usE = 0, usM = 0, pt = 0, pe = 0, pf = 0, hojeN = 0, alt = 0, bad = 0, rep = 0; const h = hoje(); const et = { empenhada: 0, execucao: 0, executada: 0, medida: 0 }; const usEt = { empenhada: 0, execucao: 0, executada: 0, medida: 0 };
-  for (const o of ativas) { const I = S.idx[o.id]; us += o.us || 0; usE += I.usExec; usM += I.usMed; pt += I.tot; pe += I.exec; pf += I.fis; alt += I.alt; bad += I.bad; rep += I.rep; et[I.etapa]++; usEt[I.etapa] += o.us || 0 }
+  let us = 0, usP = 0, usE = 0, usM = 0, usMob = 0, pt = 0, pe = 0, pf = 0, hojeN = 0, alt = 0, bad = 0, rep = 0; const h = hoje(); const et = { empenhada: 0, execucao: 0, executada: 0, medida: 0 }; const usEt = { empenhada: 0, execucao: 0, executada: 0, medida: 0 };
+  for (const o of ativas) { const I = S.idx[o.id]; us += o.us || 0; usP += I.usPrev; usE += I.usExec; usM += I.usMed; usMob += I.usMob; pt += I.tot; pe += I.exec; pf += I.fis; alt += I.alt; bad += I.bad; rep += I.rep; et[I.etapa]++; usEt[I.etapa] += I.usPrev }
   const ids = new Set(base.map(o => o.id));
   for (const r of todosRegs()) if (!r.invalido && r.dataExec === h && ids.has(r.obra)) hojeN++;
   app.innerHTML = `
   ${S.sess.length > 1 ? `<div class="toolbar">${filtroDivHtml()}</div>` : ''}
   <div class="grid k4">
     <div class="kpi"><b>${ativas.length}</b><span>obras em andamento</span><small><a href="#historico" style="color:#8b97aa">${qtdHistorico()} encerradas no histórico</a></small></div>
-    <div class="kpi"><b>${fmt(us)}</b><span>US empenhadas</span><small>obras em andamento</small></div>
-    <div class="kpi"><b>${fmt(usE)}</b><span>US executadas</span><small>${us ? fmt1(usE / us * 100) + '%' : '—'} · ${fmt(pe)} de ${fmt(pt)} postes · ${alt} com alteração</small></div>
-    <div class="kpi"><b>${fmt(usM)}</b><span>US medidas (fiscalizadas)</span><small>${us ? fmt1(usM / us * 100) + '%' : '—'} · ${fmt(pf)} postes aprovados${rep ? ` · ${rep} reprovados` : ''}</small></div>
+    <div class="kpi"><b>${fmt(usP)}</b><span>US previstas</span><small>obras em andamento${usMob ? ` · ${fmt(usMob)} de mobilização` : ''}</small></div>
+    <div class="kpi"><b>${fmt(usE)}</b><span>US executadas</span><small>${usP ? fmt1(usE / usP * 100) + '%' : '—'} · ${fmt(pe)} de ${fmt(pt)} postes · ${alt} com alteração</small></div>
+    <div class="kpi"><b>${fmt(usM)}</b><span>US medidas (fiscalizadas)</span><small>${usP ? fmt1(usM / usP * 100) + '%' : '—'} · ${fmt(pf)} postes aprovados${rep ? ` · ${rep} reprovados` : ''}</small></div>
     <div class="kpi"><b>${hojeN}</b><span>registros hoje</span><small>${dBR(h)}</small></div>
   </div>
   <div class="card etapas" style="margin-top:14px">${[['empenhada', 'Empenhadas', 'sem registro em campo'], ['execucao', 'Em execução', 'empreiteira registrando'], ['executada', 'Executadas em campo', 'aguardando fiscalização'], ['medida', 'Medidas', 'todos os postes aprovados · aguardando FF']].map(([k, t, sub]) => `<div><b>${et[k]}</b><span>${t}</span><small>${fmt(usEt[k])} US · ${sub}</small></div>`).join('<i>›</i>')}<i>›</i><a href="#historico"><b>${qtdHistorico()}</b><span>Encerradas</span><small>FF emitida · no histórico</small></a></div>
@@ -629,11 +649,11 @@ function renderObraSide() {
    <div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline"><h3 style="margin:0">Avanço</h3><b class="pct" style="font-size:22px;color:var(--or)">${fmt1(I.pct * 100)}%</b></div>
     <div class="bar" style="height:12px;margin:8px 0"><i class="b-ok" style="width:${I.ok / (I.tot || 1) * 100}%"></i><i class="b-alt" style="width:${I.alt / (I.tot || 1) * 100}%"></i><i class="b-bad" style="width:${I.bad / (I.tot || 1) * 100}%"></i></div>
     <div class="small">${I.exec} de ${I.tot} postes · ${I.ok} conforme · ${I.alt} com alteração · ${I.bad} não executado(s)${I.novos.length ? ` · ${I.novos.length} não previsto(s)` : ''}</div>
-    <div class="small muted" style="margin-top:4px">US executadas: ${fmt(I.usExec)} de ${fmt(o.us)} (proporção de postes)</div>
+    <div class="small muted" style="margin-top:4px">${I.sim ? `US executadas: ${fmt(I.usExec)} de ${fmt(I.usCampoPrev)} em campo${I.usMob ? ` · mobilização ${fmt(I.usMob)} à parte` : ''}` : `US executadas: ${fmt(I.usExec)} de ${fmt(o.us)} (proporção de postes)`}</div>
     ${hist ? '' : `<div style="margin-top:10px">${etapaChip(I)}</div>`}
     <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:12px"><h3 style="margin:0">Fiscalização</h3><b class="pct" style="font-size:18px;color:var(--ok)">${fmt1(I.pctFis * 100)}%</b></div>
     <div class="bar" style="height:8px;margin:6px 0"><i class="b-ok" style="width:${I.pctFis * 100}%"></i><i class="b-bad" style="width:${I.rep / (I.tot || 1) * 100}%"></i></div>
-    <div class="small">${I.fis} de ${I.tot} postes aprovados (medidos)${I.rep ? ` · <b style="color:var(--bad)">${I.rep} reprovado(s)</b>` : ''} · US medidas: ${fmt(I.usMed)}</div>
+    <div class="small">${I.fis} de ${I.tot} postes aprovados (medidos)${I.rep ? ` · <b style="color:var(--bad)">${I.rep} reprovado(s)</b>` : ''} · US medidas: ${fmt(I.usMed)}${I.sim && I.usMob && !I.encerr ? ` · + mobilização ${fmt(I.usMob)} a medir no fechamento` : ''}</div>
     ${!hist && podeFiscalizar(o) && aFiscalizar(o).length ? `<button class="btn sm" id="flote" style="margin-top:10px;background:var(--ok);color:#fff">✔️ Aprovar todos os executados (${aFiscalizar(o).length})</button><div class="small muted" style="margin-top:4px">Ou clique num poste da planta para aprovar ou reprovar um por um.</div>` : ''}
     ${hist && o.encerramento ? `<div class="small muted" style="margin-top:6px">Encerramento: ${esc(o.encerramento)}</div>` : ''}</div>
    <div class="card"><h3>Dados do empenho</h3><div class="kv">
@@ -1231,7 +1251,7 @@ function abrirPoste(o, key, novoPos, rasc) {
   const titulo = novo ? 'Poste não previsto' : rotuloPoste(o, key);
   openLayer(`<div class="ov" id="shov" style="align-items:flex-end;padding:0"><div class="sheet" style="position:relative;width:100%"><div class="grab"></div>
     <div style="display:flex;justify-content:space-between;align-items:center"><h4>${esc(titulo)}</h4><button class="btn sm ghost" id="shx">Fechar</button></div>
-    ${novo || String(key).startsWith("N:") ? '' : `<div class="oqf"><div class="lbl">O que fazer neste poste</div>${(pp.estruturas || []).length ? estHtml(pp) : ''}${prev && !((pp.estruturas || []).length && /^(Instalar|Retirar|Modificar)\b/i.test(prev)) ? `<div class="small" style="margin-top:${(pp.estruturas || []).length ? 6 : 0}px">${esc(prev)}</div>` : ''}${!(pp.estruturas || []).length && !prev ? `<div class="small muted">${ret ? 'Retirar o poste.' : 'O projeto não trouxe a estrutura deste poste. Confira no PDF (botão no topo).'}</div>` : ''}</div>`}
+    ${novo || String(key).startsWith("N:") ? '' : `<div class="oqf"><div class="lbl">O que fazer neste poste</div>${(() => { const s = simObra(o), u = s && Number(s.postes[pp.n]); return u ? `<div class="small" style="margin-bottom:6px"><b>${fmt(u)} US</b> previstas neste poste</div>` : '' })()}${(pp.estruturas || []).length ? estHtml(pp) : ''}${prev && !((pp.estruturas || []).length && /^(Instalar|Retirar|Modificar)\b/i.test(prev)) ? `<div class="small" style="margin-top:${(pp.estruturas || []).length ? 6 : 0}px">${esc(prev)}</div>` : ''}${!(pp.estruturas || []).length && !prev ? `<div class="small muted">${ret ? 'Retirar o poste.' : 'O projeto não trouxe a estrutura deste poste. Confira no PDF (botão no topo).'}</div>` : ''}</div>`}
     ${st && st.last ? `<div class="small" style="margin-top:6px">Situação atual: <span class="chip ${TIPO_CH[st.last.tipo]}">${esc(tipoTx(o, st.last))}</span>${st.last.pendente ? ' <span class="chip">aguardando envio</span>' : ''}</div>` : ''}
     ${fAtual ? `<div class="small" style="margin-top:6px">Fiscalização: <span class="chip ${TIPO_CH[fAtual]}">${esc(TIPO_TX[fAtual])}</span></div>` : ''}
     ${fiscal && executado ? `<div class="fiscbox"><div class="lbl">Fiscalização</div><div class="bigbtns"><button class="b1" data-t="aprovado">✔️ Aprovar · medido</button><button class="b3" data-t="reprovado">✖️ Reprovar</button></div></div>${novo ? '' : '<div class="lbl" style="margin-top:12px">Registrar execução</div>'}` : ''}

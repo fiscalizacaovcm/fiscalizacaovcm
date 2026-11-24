@@ -7,7 +7,7 @@
  * Para atualizar o código depois: Implantar > Gerenciar implantações > ✏️ > Versão: Nova versão > Implantar.
  * NUNCA use "Nova implantação" de novo, porque o endereço muda e o app perde a conexão.
  */
-const VERSAO_SERVIDOR = '1.15';
+const VERSAO_SERVIDOR = '1.16';
 
 const COLS_OBRAS = ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us',
   'empenhoEm', 'prazo', 'status', 'lat', 'lon', 'locOrigem', 'plantaId', 'plantaW', 'plantaH', 'pdfId', 'pdfNome',
@@ -22,6 +22,8 @@ const TERMO_VERSAO = 'termo-v1';
 const COLS_PDE = ['id', 'obra', 'projeto', 'pep', 'municipio', 'empreiteira', 'tipo', 'fiscal', 'postes', 'folhas', 'operacional', 'data', 'horaIni', 'horaFim',
   'pessoas', 'servicos', 'encarregado', 'telefone', 'obs', 'status', 'numeroPde', 'motivo', 'solicitadoEm', 'solicitadoPor', 'analisadoEm', 'analisadoPor', 'alteradoEm', 'itens'];
 const TIPOS_PDE = ['PDE', 'PLV', 'DEC Voluntário'];
+const COLS_SIM = ['projeto', 'versao', 'pep_status', 'us_prevista', 'us_mobilizacao', 'us_campo', 'postes', 'atualizadoEm'];
+const PEP_FINAIS = ['CONC', 'ENCE']; // status PEP que tiram o projeto da fila do simulacao_ps
 const COLS_AES = ['id', 'aes', 'emitidaEm', 'orgao', 'empreiteiraAes', 'cnpj', 'empreiteira', 'contrato', 'item', 'progOrc', 'pep', 'pepOdd',
   'tipoObra', 'prazo', 'us', 'custo', 'projeto', 'obra', 'pdfId', 'criadoPor', 'criadoEm', 'alteradoEm'];
 const ABAS = {
@@ -34,7 +36,8 @@ const ABAS = {
   documentos: COLS_DOCS,
   assinantes: COLS_ASS,
   aes: COLS_AES,
-  pde: COLS_PDE
+  pde: COLS_PDE,
+  simulacao: COLS_SIM
 };
 const COL_DATA = ['empenhoEm', 'prazo', 'dataExec'];
 const COL_NUM = ['us', 'lat', 'lon', 'plantaW', 'plantaH', 'precisao', 'x', 'y', 'folha', 'custo'];
@@ -204,6 +207,8 @@ function doPost(e) {
       case 'analisarPde': return json(analisarPde(p, req));
       case 'cancelarPde': return json(cancelarPde(p, req));
       case 'removerAes': return json(removerAes(p, req));
+      case 'simulacaoPendentes': return json(simulacaoPendentes(p, req));
+      case 'importarSimulacao': return json(importarSimulacao(p, req));
       case 'cadastrarAssinante': return json(cadastrarAssinante(p, req));
       case 'imgAssinante': return json(imgAssinante(p, req));
       case 'revogarAssinante': return json(revogarAssinante(p, req));
@@ -242,6 +247,7 @@ function dados(p, req) {
   if (p.papel !== 'empreiteira') out.empreiteiras = listaEmpreiteiras();
   out.docs = resumoDocs(p);
   out.pde = resumoPde(p);
+  out.sim = lerSimMap();
   out.fiscais = listaFiscais();
   if (p.papel === 'gestor') out.aes = ler('aes').filter(function (a) { return !a.obra; });
   return out;
@@ -269,6 +275,61 @@ function listaEmpreiteiras() {
     if (normPapel(r[1]) === 'empreiteira' && r[2] && ativa !== 'NÃO' && ativa !== 'NAO') vistos[String(r[2]).trim()] = 1;
   });
   return Object.keys(vistos).sort(function (x, y) { return x.localeCompare(y, 'pt-BR'); });
+}
+
+/* ===================== simulacao_ps (US por poste) ===================== */
+/** Mapa projeto -> {versao, pep_status, us_prevista, us_mobilizacao, us_campo, postes:{num:us}}. */
+function lerSimMap() {
+  const map = {};
+  ler('simulacao').forEach(function (s) {
+    let postes = {};
+    try { postes = s.postes ? JSON.parse(s.postes) : {}; } catch (e) { postes = {}; }
+    map[String(s.projeto)] = {
+      versao: s.versao, pep_status: s.pep_status,
+      us_prevista: Number(s.us_prevista) || 0, us_mobilizacao: Number(s.us_mobilizacao) || 0,
+      us_campo: Number(s.us_campo) || 0, postes: postes, atualizadoEm: s.atualizadoEm
+    };
+  });
+  return map;
+}
+
+/** Fila: projetos das obras ativas que ainda precisam de US do Denodo.
+ *  Entra ao empenhar; sai quando pep_status é CONC/ENCE. Enquanto ativo, continua
+ *  na lista para reimportar (pega modificação de projeto e evolução do status). */
+function simulacaoPendentes(p, req) {
+  const sim = lerSimMap();
+  const pend = {};
+  ler('obras').forEach(function (o) {
+    if (o.status === 'concluida' || o.status === 'cancelada') return;
+    const proj = String(o.projeto || '').trim();
+    if (!proj) return;
+    const s = sim[proj];
+    if (s && PEP_FINAIS.indexOf(String(s.pep_status).toUpperCase()) >= 0) return; // finalizado no SAP, não puxa mais
+    pend[proj] = { projeto: proj, versao: s ? s.versao : '', temUs: !!s, pep_status: s ? s.pep_status : '' };
+  });
+  return { ok: true, pendentes: Object.keys(pend).map(function (k) { return pend[k]; }) };
+}
+
+/** Recebe do script (ponte Denodo+MIT) a US já calculada de um projeto e grava/atualiza. */
+function importarSimulacao(p, req) {
+  if (p.papel !== 'gestor') return { ok: false, erro: 'sem permissão para importar simulação' };
+  const d = req.dados || req;
+  const proj = String(d.projeto || '').trim();
+  if (!proj) return { ok: false, erro: 'projeto não informado' };
+  const linha = {
+    projeto: proj, versao: d.versao || '', pep_status: String(d.pep_status || '').toUpperCase(),
+    us_prevista: d.us_prevista != null ? d.us_prevista : '', us_mobilizacao: d.us_mobilizacao != null ? d.us_mobilizacao : '',
+    us_campo: d.us_campo != null ? d.us_campo : '', postes: JSON.stringify(d.postes || {}), atualizadoEm: agoraIso()
+  };
+  comTrava(function () {
+    const row = buscarLinha('simulacao', proj);
+    if (row) {
+      const cab = ABAS.simulacao, sh = aba('simulacao');
+      cab.forEach(function (k, i) { sh.getRange(row, i + 1).setNumberFormat('@').setValue(linha[k] === undefined ? '' : String(linha[k])); });
+    } else anexar('simulacao', linha);
+    marcarAlteracao();
+  });
+  return { ok: true };
 }
 
 /* ============================ obras ============================ */
