@@ -1,7 +1,7 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.18.0';
+const VERSAO_APP = '1.18.1';
 /* base do pdf.js: cdnjs por padrão (GitHub Pages); o pacote local define CFG.pdfjsBase
    para servir tudo do disco e não depender de liberar a CDN na rede. */
 const PDFJS_BASE = CFG.pdfjsBase || 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
@@ -146,7 +146,7 @@ async function sincronizar(op) {
     const raw = await carregarRaw(s.pref);
     try {
       const d = await api(s, 'dados', raw.desde && !completo ? { desde: raw.desde } : {});
-      if (d.docs && JSON.stringify(d.docs) !== JSON.stringify(raw.docs)) { raw.docs = d.docs; mudou = true }
+      if (d.docs && JSON.stringify(d.docs) !== JSON.stringify(raw.docs)) { raw.docs = d.docs; mudou = true; docsMudaram() }
       if (d.pde && JSON.stringify(d.pde) !== JSON.stringify(raw.pde)) { raw.pde = d.pde; mudou = true }
       if (d.sim && JSON.stringify(d.sim) !== JSON.stringify(raw.sim)) { raw.sim = d.sim; mudou = true }
       if (Array.isArray(d.pdes) && JSON.stringify(d.pdes) !== JSON.stringify(raw.pdes)) { raw.pdes = d.pdes; mudou = true }
@@ -1747,7 +1747,7 @@ function iniGestor() {
 /* --- barra de abas do campo (celular) --- */
 function atualizarAbas() {
   const tb = $('#tabbar'); if (!tb) return;
-  const mostra = S.mode === 'campo' && S.sess.length && !['login', 'fobra'].includes(S.view);
+  const mostra = S.mode === 'campo' && S.sess.length && !['login', 'fobra', 'doc', 'assinatura'].includes(S.view); // telas com barra própria no rodapé
   tb.classList.toggle('hidden', !mostra); document.body.classList.toggle('tabs', !!mostra);
   if (!mostra) return;
   const f = minhaFuncao(), emp = !souCopel();
@@ -1798,6 +1798,13 @@ async function baixarDoc(s, id, versao, btn) {
   if (btn) { btn.disabled = false; btn.textContent = t }
 }
 const DOC_ST = d => d.status === 'assinado' ? `<span class="chip ok">assinado ${dtBR(d.assinadoEm)}</span>` : '<span class="chip alt">aguardando assinatura</span>';
+/* caches de documentos: a lista (30 s), os PDFs já abertos e as assinaturas da empresa */
+let LISTA_DOCS = null; const PDF_CACHE = new Map(); const ASS_CACHE = {};
+function pdfCache(id, versao, j) { const k = id + ':' + versao; if (j) { PDF_CACHE.set(k, j); while (PDF_CACHE.size > 6) PDF_CACHE.delete(PDF_CACHE.keys().next().value) } return PDF_CACHE.get(k) }
+async function docPdfC(s, id, versao) { const c = pdfCache(id, versao); if (c) return c; const j = await api(s, 'docPdf', { id, versao }); return pdfCache(id, versao, j) }
+async function assinantesC(s, novo) { const c = ASS_CACHE[s.pref]; if (c && !novo && Date.now() - c.t < 300000) return c.L; const L = ((await api(s, 'assinantes', {})).assinantes || []); ASS_CACHE[s.pref] = { t: Date.now(), L }; return L }
+function docsMudaram() { LISTA_DOCS = null; for (const k in DOCS_CACHE) delete DOCS_CACHE[k] }
+async function listarDocsC() { if (LISTA_DOCS && Date.now() - LISTA_DOCS.t < 30000) return LISTA_DOCS; const r = await listarDocs(); if (!r.erro) LISTA_DOCS = Object.assign({ t: Date.now() }, r); return r }
 async function listarDocs(filtro) {
   const L = []; let erro = '';
   for (const s of S.sess) {
@@ -1813,7 +1820,7 @@ function ligarDocBtns(root, L) {
   $$('[data-drm]', root).forEach(b => b.onclick = async e => {
     e.stopPropagation(); if (!b.dataset.conf) { b.dataset.conf = 1; b.textContent = 'Confirmar remoção'; return }
     const d = L.find(x => x.id === b.dataset.drm); b.disabled = true;
-    try { await api(sessDe(d.pref), 'removerDocumento', { id: d.id }); delete DOCS_CACHE[d.obra]; toast('Documento removido'); sincronizar(); render() } catch (err) { toast(msgServidor(err), 1); b.disabled = false }
+    try { await api(sessDe(d.pref), 'removerDocumento', { id: d.id }); docsMudaram(); toast('Documento removido'); sincronizar(); render() } catch (err) { toast(msgServidor(err), 1); b.disabled = false }
   });
 }
 /* Copel: todos os documentos */
@@ -1840,7 +1847,7 @@ async function vDocs(app) {
   if (S.view !== 'docs') return;
   const al = $('#aslst'); al.classList.toggle('muted', !AS.length);
   al.innerHTML = AS.length ? `<table><thead><tr><th>Empreiteira</th><th>Responsável</th><th>Cadastrada</th><th>Último uso</th><th></th></tr></thead><tbody>${AS.map(a => `<tr><td>${esc(a.empresa)}</td><td><b>${esc(a.nome)}</b><div class="small muted">${esc(a.cargo || '')}</div></td><td>${dtBR(a.criadoEm)}</td><td>${a.ultimoUso ? dtBR(a.ultimoUso) : '—'}${a.bloqueado ? ' · <b style="color:var(--bad)">bloqueada</b>' : ''}</td><td>${sessDe(a.pref).papel === 'gestor' ? `<button class="btn sm ghost" data-rva="${esc(a.id)}">Revogar</button>` : ''}</td></tr>`).join('')}</tbody></table>` : 'Nenhuma empreiteira cadastrou assinatura ainda. O cadastro é feito pelo responsável da empresa, no app, com o código da empreiteira.';
-  $$('[data-rva]', al).forEach(b => b.onclick = async () => { if (!b.dataset.conf) { b.dataset.conf = 1; b.textContent = 'Confirmar'; return } const a = AS.find(x => x.id === b.dataset.rva); b.disabled = true; try { await api(sessDe(a.pref), 'revogarAssinante', { id: a.id }); toast('Assinatura revogada'); b.closest('tr').remove() } catch (e) { toast(msgServidor(e), 1); b.disabled = false } });
+  $$('[data-rva]', al).forEach(b => b.onclick = async () => { if (!b.dataset.conf) { b.dataset.conf = 1; b.textContent = 'Confirmar'; return } const a = AS.find(x => x.id === b.dataset.rva); b.disabled = true; try { await api(sessDe(a.pref), 'revogarAssinante', { id: a.id }); delete ASS_CACHE[a.pref]; toast('Assinatura revogada'); b.closest('tr').remove() } catch (e) { toast(msgServidor(e), 1); b.disabled = false } });
 }
 /* card na tela da obra (Histórico): enviar e acompanhar */
 const DOCS_CACHE = {};
@@ -1882,12 +1889,13 @@ async function cardDocsObra(o) {
   const arqs = {};
   const ligarArq = (id, cb) => { const i = $('#' + id); if (!i) return; i.onchange = e => { arqs[id] = e.target.files[0] || null; $('#' + id + 'n').textContent = arqs[id] ? arqs[id].name : 'Escolher PDF'; cb() } };
   const grande = f => f && f.size > 20e6;
-  const fim = async (msg) => { delete DOCS_CACHE[o.id]; toast(msg); await sincronizar() };
+  // o documento novo entra na lista na hora; a sincronização completa roda em segundo plano
+  const fim = (msg, novos) => { docsMudaram(); if (novos && novos.length) DOCS_CACHE[o.id] = { t: Date.now(), L: novos.map(d => Object.assign(d, { pref: o.pref })).concat(L), erro: '' }; toast(msg); sincronizar() };
   if (hist) {
     ligarArq('fhd', () => $('#henv').disabled = !arqs.fhd);
     $('#henv').onclick = async e => {
       const b = e.currentTarget; if (grande(arqs.fhd)) return toast('PDF muito grande (máx. 20 MB)', 1); b.disabled = true; b.textContent = 'Enviando…';
-      try { await api(s, 'enviarDocumento', { obra: o.id, tipo: $('#dtipo').value, pdf: { b64: await blobB64(arqs.fhd), nome: arqs.fhd.name } }); await fim('Documento enviado: a empreiteira já pode assinar'); cardDocsObra(o) }
+      try { const j = await api(s, 'enviarDocumento', { obra: o.id, tipo: $('#dtipo').value, pdf: { b64: await blobB64(arqs.fhd), nome: arqs.fhd.name } }); fim('Documento enviado: a empreiteira já pode assinar', [j.documento]); cardDocsObra(o) }
       catch (err) { toast(msgServidor(err), 1); b.disabled = false; b.textContent = 'Enviar para ' + o.empreiteira + ' assinar' }
     };
     return;
@@ -1899,7 +1907,7 @@ async function cardDocsObra(o) {
     const b = e.currentTarget; if (grande(arqs.fpb)) return toast('PDF muito grande (máx. 20 MB)', 1); b.disabled = true; b.textContent = 'Enviando…';
     try {
       const j = await api(s, 'enviarDocumento', { obra: o.id, tipo: 'BMD parcial', pdf: { b64: await blobB64(arqs.fpb), nome: arqs.fpb.name }, medicao: I ? { postes: aprov, qtd: aprov.length, us: +I.usMed.toFixed(3), novos: novos.length } : null });
-      await fim(`BMD parcial nº ${j.documento.parcial} enviado para assinatura`); cardDocsObra(o);
+      fim(`BMD parcial nº ${j.documento.parcial} enviado para assinatura`, [j.documento]); cardDocsObra(o);
     } catch (err) { toast(msgServidor(err), 1); b.disabled = false; b.textContent = 'Enviar BMD parcial para ' + o.empreiteira + ' assinar' }
   };
   // encerramento: BMD final + FF + Vistoria
@@ -1912,7 +1920,7 @@ async function cardDocsObra(o) {
     try {
       const pdf = async f => ({ b64: await blobB64(f), nome: f.name });
       await api(s, 'encerramentoDocs', { obra: o.id, docs: { bmd: await pdf(arqs.feb), ff: await pdf(arqs.fef), vistoria: await pdf(arqs.fev) } });
-      await fim('BMD final, FF e vistoria enviados: obra encerrada e movida para o Histórico'); go('historico');
+      fim('BMD final, FF e vistoria enviados: obra encerrada e movida para o Histórico'); go('historico');
     } catch (err) { toast(msgServidor(err), 1); b.disabled = false; b.style.background = ''; delete b.dataset.conf; b.textContent = 'Enviar os 3 e encerrar a obra' }
   };
   const troca = (mostra, esconde) => ev => { ev.preventDefault(); $('#' + mostra).style.display = ''; $('#' + esconde).style.display = 'none' };
@@ -1922,7 +1930,7 @@ async function cardDocsObra(o) {
 /* Empreiteira: lista para assinar */
 async function vAssinar(app) {
   app.innerHTML = `<div class="fhead"><div class="who"><div><b>Documentos para assinar</b><div class="small muted">AES, BMD, FF e vistoria enviados pela Copel</div></div><a class="btn sm ghost" href="#campo" style="text-decoration:none">← Obras</a></div></div><div style="padding:0 14px"><a href="#assinatura" class="small">✍️ Assinatura cadastrada da empresa</a></div><div class="flist" id="alist"><div class="fcard empty">Carregando…</div></div>`;
-  const { L, erro } = await listarDocs();
+  const { L, erro } = await listarDocsC();
   if (S.view !== 'assinar') return;
   L.sort((a, b) => (a.status === 'assinado') - (b.status === 'assinado') || String(b.enviadoEm).localeCompare(String(a.enviadoEm)));
   $('#alist').innerHTML = erro && !L.length ? `<div class="fcard empty">${esc(erro)}</div>` : L.length ? L.map(d => `<div class="fcard" data-dv="${esc(d.id)}"><div class="t"><b>${esc(nomeDoc(d))} · ${esc(d.projeto)}</b>${DOC_ST(d)}</div>
@@ -1937,14 +1945,16 @@ async function vDoc(app) {
   const id = S.docId; const campo = S.mode === 'campo';
   app.innerHTML = `<div class="${campo ? 'fhead' : ''}"><div class="who card" style="display:flex;align-items:center;gap:10px;padding:10px 12px"><a class="btn sm ghost" href="#${campo ? 'assinar' : 'docs'}" style="text-decoration:none">←</a><div style="flex:1;min-width:0" id="dtit"><b>Carregando documento…</b></div></div></div>
    <div id="dpages" class="dpages"></div><div id="dbar"></div>`;
-  const { L } = await listarDocs(); const d = L.find(x => x.id === id);
+  const { L } = await listarDocsC(); const d = L.find(x => x.id === id);
   if (S.view !== 'doc' || S.docId !== id) return;
   if (!d) { $('#dtit').innerHTML = '<b>Documento não encontrado</b>'; return }
   const s = sessDe(d.pref);
   $('#dtit').innerHTML = `<b>${esc(nomeDoc(d))} · projeto ${esc(d.projeto)}</b><div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(d.nome)} · ${d.status === 'assinado' ? 'assinado por ' + esc(d.assinadoPor) + ' em ' + dtBR(d.assinadoEm) : 'aguardando assinatura de ' + esc(d.empreiteira)}</div>`;
-  let j; try { j = await api(s, 'docPdf', { id, versao: d.status === 'assinado' ? 'assinado' : 'original' }) } catch (e) { $('#dpages').innerHTML = `<div class="card empty">${esc(msgServidor(e))}</div>`; return }
+  const podeAssinar = s.papel === 'empreiteira' && d.status !== 'assinado' && s.funcao !== 'encarregado';
+  // enquanto o PDF baixa, já busca a assinatura da empresa e o pdf-lib: o "Assinar" abre na hora
+  if (podeAssinar) { assinantesC(s).then(A => { const a = A.find(x => !x.bloqueado); if (a) imgAss(s, a.id).catch(() => { }) }).catch(() => { }); pdfLibA().catch(() => { }) }
+  let j; try { j = await docPdfC(s, id, d.status === 'assinado' ? 'assinado' : 'original') } catch (e) { $('#dpages').innerHTML = `<div class="card empty">${esc(msgServidor(e))}</div>`; return }
   const bytes = b64Bytes(j.b64);
-  const podeAssinar = s.papel === 'empreiteira' && d.status !== 'assinado';
   const bar = $('#dbar');
   bar.innerHTML = `<div class="dsign">${podeAssinar ? `<button class="btn pri" id="dass" style="flex:1;padding:14px;font-size:15px">✍️ Assinar documento</button>` : d.status === 'assinado' ? `<button class="btn pri" id="dbx" style="flex:1;padding:12px">⬇️ Baixar PDF assinado</button>` : `<span class="small muted" style="flex:1">Aguardando a assinatura da empreiteira. O download do original não fica disponível para ela antes de assinar.</span>`}</div>`;
   $('#dbx') && ($('#dbx').onclick = () => baixarBytes(bytes, j.nome));
@@ -2009,7 +2019,7 @@ async function vAssinatura(app) {
     let L = []; try { L = (await api(s, 'assinantes', {})).assinantes || [] } catch (e) { $('#alst').innerHTML = `<b>Assinaturas cadastradas</b><div class="small muted">${esc(msgServidor(e))}</div>`; return }
     $('#alst').innerHTML = `<b>Assinaturas cadastradas</b>` + (L.length ? L.map(a => `<div class="docrow" style="cursor:default"><img data-img="${esc(a.id)}" class="sigmini" alt=""><div style="flex:1;min-width:0"><b>${esc(a.nome)}</b><div class="small muted">${esc(a.cargo || '')} · desde ${dtBR(a.criadoEm)}${a.bloqueado ? ' · <b style="color:var(--bad)">bloqueada (PIN)</b>' : ''}</div></div><button class="btn sm ghost" data-rv="${esc(a.id)}">Excluir</button></div>`).join('') : `<div class="small muted" style="margin-top:6px">Nenhuma ainda. Cadastre abaixo para poder assinar os documentos.</div>`);
     $$('[data-img]', $('#alst')).forEach(async im => { try { im.src = await imgAss(s, im.dataset.img) } catch (e) { } });
-    $$('[data-rv]', $('#alst')).forEach(b => b.onclick = async () => { if (!b.dataset.conf) { b.dataset.conf = 1; b.textContent = 'Confirmar'; return } b.disabled = true; try { await api(s, 'revogarAssinante', { id: b.dataset.rv }); toast('Assinatura excluída'); sincronizar(); lista() } catch (e) { toast(msgServidor(e), 1); b.disabled = false } });
+    $$('[data-rv]', $('#alst')).forEach(b => b.onclick = async () => { if (!b.dataset.conf) { b.dataset.conf = 1; b.textContent = 'Confirmar'; return } b.disabled = true; try { await api(s, 'revogarAssinante', { id: b.dataset.rv }); delete ASS_CACHE[s.pref]; toast('Assinatura excluída'); sincronizar(); lista() } catch (e) { toast(msgServidor(e), 1); b.disabled = false } });
   };
   lista();
   $('#asalva').onclick = async e => {
@@ -2022,7 +2032,7 @@ async function vAssinatura(app) {
     const img = pad.png(); if (!img) return toast('Desenhe a assinatura', 1);
     const b = e.currentTarget; b.disabled = true; b.textContent = 'Salvando…';
     try {
-      await api(s, 'cadastrarAssinante', { nome, cargo: $('#acg').value.trim(), pin, img, aceite: true });
+      await api(s, 'cadastrarAssinante', { nome, cargo: $('#acg').value.trim(), pin, img, aceite: true }); delete ASS_CACHE[s.pref];
       S.nome = S.nome || nome; toast('Assinatura cadastrada'); await sincronizar();
       if (volta) { sessionStorage.removeItem('fisc.voltarDoc'); go('doc-' + volta) } else vAssinatura(app);
     } catch (err) { toast(msgServidor(err), 1); b.disabled = false; b.textContent = 'Salvar assinatura' }
@@ -2031,7 +2041,7 @@ async function vAssinatura(app) {
 /* ---------- assinar: escolher o lugar + PIN ---------- */
 async function posicionarAssinatura(d, s, bytes) {
   const bar = $('#dbar'); bar.innerHTML = `<div class="dsign"><span class="small muted">Carregando assinatura…</span></div>`;
-  let L = []; try { L = ((await api(s, 'assinantes', {})).assinantes || []).filter(a => !a.bloqueado) } catch (e) { toast(msgServidor(e), 1); vDoc($('#app')); return }
+  let L = []; try { L = (await assinantesC(s)).filter(a => !a.bloqueado) } catch (e) { toast(msgServidor(e), 1); vDoc($('#app')); return }
   if (!L.length) { sessionStorage.setItem('fisc.voltarDoc', d.id); toast('Primeiro cadastre a assinatura do responsável'); go('assinatura'); return }
   let A = L[0]; let src = await imgAss(s, A.id);
   const pags = $$('#dpages .pgw'); if (!pags.length) { toast('Aguarde o documento carregar', 1); vDoc($('#app')); return }
@@ -2070,8 +2080,9 @@ function confirmarAssinatura(d, s, bytes, A, src, POS) {
       const quando = new Date();
       const assinado = await carimbarPdf(bytes, { nome: A.nome, cargo: A.cargo, empresa: s.empresa, quando, id: d.id, tipo: d.tipo, projeto: d.projeto, pep: d.pep, arquivo: d.nome, hash: hashOriginal, chave: String(s.chave).slice(-4), div: s.div, sig: Object.assign({ png: b64Bytes(src.split(',')[1]) }, POS) });
       b.textContent = 'Enviando…';
-      await api(s, 'assinarDocumento', { id: d.id, assinante: A.id, pin: $('#aspin').value, hashOriginal, assinadoEm: quando.toISOString(), dispositivo: navigator.userAgent, pdf: { b64: await blobB64(new Blob([assinado])) } });
+      const r = await api(s, 'assinarDocumento', { id: d.id, assinante: A.id, pin: $('#aspin').value, hashOriginal, assinadoEm: quando.toISOString(), dispositivo: navigator.userAgent, pdf: { b64: await blobB64(new Blob([assinado])) } });
       closeLayer(); toast('Documento assinado');
+      if (r.documento) Object.assign(d, r.documento); docsMudaram(); delete ASS_CACHE[s.pref];
       $$('#dpages .pgw').forEach(w => { w.classList.remove('pos'); w.onclick = null });
       $('#dbar').innerHTML = `<div class="dsign"><button class="btn pri" id="dbx" style="flex:1;padding:12px">⬇️ Baixar PDF assinado</button></div>`;
       $('#dbx').onclick = () => baixarBytes(assinado, 'ASSINADO_' + d.nome);

@@ -7,7 +7,7 @@
  * Para atualizar o código depois: Implantar > Gerenciar implantações > ✏️ > Versão: Nova versão > Implantar.
  * NUNCA use "Nova implantação" de novo, porque o endereço muda e o app perde a conexão.
  */
-const VERSAO_SERVIDOR = '1.17';
+const VERSAO_SERVIDOR = '1.18';
 
 const COLS_OBRAS = ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us',
   'empenhoEm', 'prazo', 'status', 'lat', 'lon', 'locOrigem', 'plantaId', 'plantaW', 'plantaH', 'pdfId', 'pdfNome',
@@ -704,11 +704,16 @@ function atualizarLinha(nome, id, campos) {
   const row = buscarLinha(nome, id);
   if (!row) return false;
   const cab = ABAS[nome];
-  const sh = aba(nome);
+  const rg = aba(nome).getRange(row, 1, 1, cab.length);
+  // lê a linha uma vez e grava tudo de uma vez (antes era 1 chamada por campo)
+  const tz = Session.getScriptTimeZone();
+  const vals = rg.getValues()[0].map(function (v, i) { return v instanceof Date ? String(converter(cab[i], v, tz)) : String(v); });
+  let mudou = false;
   Object.keys(campos).forEach(function (k) {
     const c = cab.indexOf(k);
-    if (c >= 0) sh.getRange(row, c + 1).setNumberFormat('@').setValue(campos[k] === null || campos[k] === undefined ? '' : String(campos[k]));
+    if (c >= 0) { vals[c] = campos[k] === null || campos[k] === undefined ? '' : String(campos[k]); mudou = true; }
   });
+  if (mudou) { rg.setNumberFormat('@'); rg.setValues([vals]); }
   return true;
 }
 
@@ -880,20 +885,25 @@ function assinarDocumento(p, req) {
   if (!d) return { ok: false, erro: 'documento não encontrado' };
   if (d.status === 'assinado') return { ok: true, repetido: true, documento: docPublico(d) };
   if (!req.pdf || !req.pdf.b64) return { ok: false, erro: 'PDF assinado não enviado' };
-  const chk = conferirPin(p, req.assinante, req.pin);
+  const chk = conferirPin(p, req.assinante, req.pin, true);
   if (!chk.ok) return chk;
   const as = chk.assinante;
-  // confere que o PDF assinado partiu do mesmo original que a Copel enviou
-  const hashOrig = sha256(DriveApp.getFileById(d.pdfId).getBlob().getBytes());
-  if (hashOrig !== d.hash || req.hashOriginal !== d.hash) return { ok: false, erro: 'o documento original foi alterado; peça um novo envio' };
+  // o aparelho calculou o SHA-256 do original que baixou; tem que ser o mesmo gravado no envio
+  // (o PDF original fica na pasta privada do script; não é preciso baixá-lo de novo do Drive)
+  if (req.hashOriginal !== d.hash) return { ok: false, erro: 'o documento original foi alterado; peça um novo envio' };
   const bytes = Utilities.base64Decode(req.pdf.b64);
   const arq = pastaDocs().createFile(Utilities.newBlob(bytes, 'application/pdf', 'ASSINADO_' + d.projeto + '_' + d.tipo + '_' + d.id + '.pdf'));
+  const agora = agoraIso();
   const campos = {
-    status: 'assinado', assinadoPor: as.nome + (as.cargo ? ' (' + as.cargo + ')' : '') + ' · ' + p.empresa, assinadoEm: req.assinadoEm || agoraIso(), assinaturaChave: p.chave,
-    dispositivo: String(req.dispositivo || '').slice(0, 200), pdfAssinadoId: arq.getId(), hashAssinado: sha256(bytes), alteradoEm: agoraIso()
+    status: 'assinado', assinadoPor: as.nome + (as.cargo ? ' (' + as.cargo + ')' : '') + ' · ' + p.empresa, assinadoEm: req.assinadoEm || agora, assinaturaChave: p.chave,
+    dispositivo: String(req.dispositivo || '').slice(0, 200), pdfAssinadoId: arq.getId(), hashAssinado: sha256(bytes), alteradoEm: agora
   };
   let ok = false;
-  comTrava(function () { ok = atualizarLinha('documentos', d.id, campos); marcarAlteracao(); });
+  comTrava(function () {
+    ok = atualizarLinha('documentos', d.id, campos);
+    atualizarLinha('assinantes', as.id, { tentativas: '0', ultimoUso: agora });
+    marcarAlteracao();
+  });
   if (!ok) return { ok: false, erro: 'não foi possível gravar' };
   Object.keys(campos).forEach(function (k) { d[k] = campos[k]; });
   return { ok: true, documento: docPublico(d) };
@@ -953,7 +963,7 @@ function revogarAssinante(p, req) {
   return { ok: ok };
 }
 /** Confere o PIN; 5 erros seguidos bloqueiam (a empresa cadastra a assinatura de novo ou o gestor revoga). */
-function conferirPin(p, id, pin) {
+function conferirPin(p, id, pin, adiarUso) {
   const a = acharAssinante(p, id);
   if (!a) return { ok: false, erro: 'assinatura não encontrada: cadastre a assinatura do responsável' };
   const t = Number(a.tentativas || 0);
@@ -962,7 +972,8 @@ function conferirPin(p, id, pin) {
     comTrava(function () { atualizarLinha('assinantes', a.id, { tentativas: String(t + 1) }); });
     return { ok: false, erro: 'PIN incorreto (' + (4 - t) + ' tentativa(s) restante(s))' };
   }
-  comTrava(function () { atualizarLinha('assinantes', a.id, { tentativas: '0', ultimoUso: agoraIso() }); });
+  // quem chama com adiarUso grava o "último uso" junto com o documento (uma trava só)
+  if (!adiarUso || Number(a.tentativas || 0) > 0) comTrava(function () { atualizarLinha('assinantes', a.id, { tentativas: '0', ultimoUso: agoraIso() }); });
   return { ok: true, assinante: a };
 }
 
