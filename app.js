@@ -1,7 +1,7 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.18.1';
+const VERSAO_APP = '1.18.2';
 /* base do pdf.js: cdnjs por padrão (GitHub Pages); o pacote local define CFG.pdfjsBase
    para servir tudo do disco e não depender de liberar a CDN na rede. */
 const PDFJS_BASE = CFG.pdfjsBase || 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
@@ -53,6 +53,15 @@ const podeEditarObra = o => papelObra(o) === 'gestor';
 const podeInvalidar = o => ['gestor', 'fiscal'].includes(papelObra(o));
 function empresaCampo(o) { const s = sessObra(o); return s && s.papel === 'empreiteira' ? s.empresa : 'Copel (fiscalização)' }
 function salvarSess() { lsSet('fisc.sess', S.sess.map(s => ({ pref: s.pref, div: s.div, url: s.url, chave: s.chave, papel: s.papel, funcao: s.funcao, empresa: s.empresa, responsavel: s.responsavel }))) }
+function fmtCodigo(v) { const t = String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 11); return [t.slice(0, 3), t.slice(3, 7), t.slice(7, 11)].filter(Boolean).join('-') }
+/** Se o endereço do servidor da divisão mudou no config.js (ex.: homologação → produção), a sessão antiga sai e pede o código de novo. */
+async function conferirServidor() {
+  const trocou = S.sess.filter(s => { const d = (CFG.divisoes || {})[s.pref]; return d && d.url && s.url !== d.url });
+  if (!trocou.length) return;
+  for (const s of trocou) { await IDB.del('cache:' + s.pref).catch(() => { }); delete S.raw[s.pref] }
+  S.sess = S.sess.filter(s => !trocou.includes(s)); salvarSess();
+  setTimeout(() => toast('O servidor da ' + trocou.map(s => s.div).join(', ') + ' mudou: entre de novo com o seu código de acesso.'), 700);
+}
 function divisaoDoCodigo(c) {
   const pref = String(c || '').trim().toUpperCase().split('-')[0];
   const d = (CFG.divisoes || {})[pref];
@@ -311,7 +320,7 @@ function vLogin(app, adicionando) {
     <div class="logo">Fiscalização <span>de Obras</span></div>
     <p class="muted">${adicionando ? 'Digite o código de acesso de outra divisão.' : 'Digite o código de acesso que você recebeu da fiscalização.'}</p>
     <label class="f">Código de acesso</label>
-    <input class="i" id="cod" placeholder="Ex.: CEP-AB12-CD34" autocapitalize="characters" autocomplete="off" spellcheck="false" style="font-size:18px;letter-spacing:.06em;text-transform:uppercase">
+    <input class="i" id="cod" placeholder="Ex.: CEP-AB12-CD34" maxlength="13" autocapitalize="characters" autocomplete="off" spellcheck="false" style="font-size:18px;letter-spacing:.06em;text-transform:uppercase">
     <button class="btn pri" id="entrar" style="width:100%;margin-top:14px;padding:13px;font-size:15px">Entrar</button>
     ${adicionando ? '<button class="btn ghost" id="canc" style="width:100%;margin-top:8px">Cancelar</button>' : ''}
     <div class="small muted" id="lmsg" style="margin-top:10px;min-height:18px"></div>
@@ -334,6 +343,8 @@ function vLogin(app, adicionando) {
     } catch (e) { $('#entrar').disabled = false; msg.textContent = e.rede ? 'Sem conexão com o servidor. Tente de novo com sinal.' : e.message }
   };
   $('#entrar').onclick = go_;
+  // o traço entra sozinho: CEP-XXXX-XXXX
+  $('#cod').oninput = e => { const i = e.target, v = fmtCodigo(i.value); if (v !== i.value) i.value = v };
   $('#cod').onkeydown = e => { if (e.key === 'Enter') go_() };
   $('#canc') && ($('#canc').onclick = () => { location.hash = 'painel'; route() });
   setTimeout(() => $('#cod').focus(), 50);
@@ -1774,7 +1785,7 @@ function aplicarAmbiente() {
 }
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
 (async () => {
-  aplicarAmbiente(); garantirNome();
+  aplicarAmbiente(); await conferirServidor(); garantirNome();
   // mostra o que já está no aparelho, depois atualiza
   for (const s of S.sess) { const raw = await carregarRaw(s.pref); if (raw.desde || Object.keys(raw.obras).length) S.carregado = true }
   montar(); await carregarFila(); reindex();
