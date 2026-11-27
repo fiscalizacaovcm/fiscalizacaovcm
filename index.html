@@ -160,6 +160,47 @@ textarea.i{min-height:64px;resize:vertical}
 .ov img.big{max-width:96vw;max-height:88vh;border-radius:10px}
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--nv);color:#fff;padding:10px 16px;border-radius:12px;z-index:200;font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.3);max-width:92vw}
 .toast.err{background:#991b1b}
+/* ===== TELA INICIAL POR PAPEL ===== */
+.hini.gestao{max-width:1280px;margin:0 auto}
+.hhead{display:flex;justify-content:space-between;align-items:flex-end;margin:2px 2px 12px}
+.hhead h2{font-size:20px}
+.hstrip{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 10px;scrollbar-width:none}
+.hini.campo .hstrip{padding:6px 16px 4px}
+.hc{flex:0 0 auto;min-width:92px;background:#fff;border-radius:12px;padding:9px 12px;text-decoration:none;color:var(--tx);box-shadow:0 1px 0 var(--ln);border-top:3px solid #cbd2dc}
+.hc b{display:block;font-size:22px;font-weight:800;line-height:1.05;font-variant-numeric:tabular-nums}
+.hc span{display:block;font-size:11.5px;color:var(--mu);font-weight:600;margin-top:2px}
+.hc.or{border-top-color:var(--or)}.hc.or b{color:#c2410c}.hc.bad{border-top-color:var(--bad)}.hc.bad b{color:var(--bad)}.hc.ok{border-top-color:var(--ok)}.hc.ok b{color:var(--ok)}
+.hc.zero{opacity:.55}.hc.zero b{color:var(--mu)}
+.hgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}
+.hcol{display:flex;flex-direction:column;gap:6px}
+.hini.campo .hcol{padding:6px 16px 96px}
+.hsec{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
+.hsec-t{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--mu);margin:6px 2px 0}
+.hsec.alerta .hsec-t{color:var(--bad)}
+.hk{margin-bottom:12px;grid-template-columns:repeat(4,minmax(0,1fr))}.hini.campo .hk{padding:8px 16px 0;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+@media (max-width:900px){.hk{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.hini.campo .hk .kpi b{font-size:22px}
+.hmes{margin-bottom:6px}
+.pdec .pdenum{font-size:22px;font-weight:800;letter-spacing:.01em;color:var(--nv)}
+.pdec .pdenum span{color:var(--or);font-variant-numeric:tabular-nums}
+.pdec .pdenum.pend{font-size:15px;color:var(--mu)}
+.pdec.enc{border-left:5px solid var(--or)}
+.pdeprog{display:flex;align-items:center;gap:8px;margin-top:8px}
+.pdepostes{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+.pdepostes .pp{background:#f4f6f9;border-radius:9px;padding:8px 10px;font-size:13px}
+.pdepostes .pp b{display:block}.pdepostes .pp span{display:block;color:var(--mu);font-size:12.5px;margin-top:2px}
+.pdepostes .pp.ok{background:#ecfdf3}.pdepostes .pp.ok b{color:var(--ok)}
+.pdebts{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.hob .t b{font-size:15px}.hob .s{margin-bottom:0}
+.pipe4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;text-align:center}
+.pipe4 b{display:block;font-size:24px;font-weight:800;color:var(--nv)}.pipe4 span{font-size:11.5px;color:var(--mu);font-weight:600}
+.pdefoco{display:flex;align-items:center;gap:8px;justify-content:space-between;background:#dbeafe;color:#1e3a8a;font-size:13px;padding:6px 12px}
+.tabbar{position:fixed;left:0;right:0;bottom:0;z-index:40;display:flex;background:#fff;border-top:1px solid var(--ln);padding:4px 4px calc(4px + env(safe-area-inset-bottom))}
+.tabbar a{flex:1;display:flex;flex-direction:column;align-items:center;gap:1px;text-decoration:none;color:var(--mu);font-size:11px;font-weight:700;padding:5px 0;border-radius:10px}
+.tabbar a span{font-size:19px;line-height:1.1}
+.tabbar a.on{color:var(--or);background:#fff4eb}
+body.tabs .flist{padding-bottom:96px}
+@media (max-width:900px){.hgrid{grid-template-columns:1fr}}
 /* ===== CAMPO (mobile) ===== */
 body.campo main{padding:0;max-width:none}
 .fhead{padding:14px 16px 6px}
@@ -212,6 +253,7 @@ body{padding-top:env(safe-area-inset-top)}
 <div class="top" id="topo">
   <div class="brand">Fiscalização <span>de Obras</span></div>
   <nav id="nav">
+    <a href="#inicio" data-v="inicio">Início</a>
     <a href="#painel" data-v="painel">Painel</a>
     <a href="#obras" data-v="obras">Obras</a>
     <a href="#historico" data-v="historico">Histórico</a>
@@ -227,6 +269,7 @@ body{padding-top:env(safe-area-inset-top)}
 </div>
 <main id="app"></main>
 <div id="layer"></div>
+<nav id="tabbar" class="tabbar hidden"></nav>
 <script src="config.js"></script>
 <script src="prmap.js"></script>
 <script src="app.js"></script>

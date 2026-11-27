@@ -1,7 +1,7 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.17.0';
+const VERSAO_APP = '1.18.0';
 /* base do pdf.js: cdnjs por padrão (GitHub Pages); o pacote local define CFG.pdfjsBase
    para servir tudo do disco e não depender de liberar a CDN na rede. */
 const PDFJS_BASE = CFG.pdfjsBase || 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
@@ -29,6 +29,9 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const fmt = n => (n == null || isNaN(n)) ? '—' : Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 0 });
 const fmt1 = n => (n == null || isNaN(n)) ? '—' : Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 1 });
 const hoje = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') };
+/** Data local daqui a n dias (YYYY-MM-DD). */
+const diaMais = n => { const d = new Date(); d.setDate(d.getDate() + n); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') };
+const amanha = () => diaMais(1);
 const dBR = s => { if (!s) return '—'; const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}/${m[2]}/${m[1]}` : s };
 const dtBR = iso => { if (!iso) return ''; const d = new Date(iso); if (isNaN(d)) return ''; return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) };
 const diasAte = s => { if (!s) return null; const a = new Date(s + 'T12:00:00'), b = new Date(hoje() + 'T12:00:00'); return Math.round((a - b) / 864e5) };
@@ -49,7 +52,7 @@ const souCopel = () => S.sess.some(s => s.papel !== 'empreiteira');
 const podeEditarObra = o => papelObra(o) === 'gestor';
 const podeInvalidar = o => ['gestor', 'fiscal'].includes(papelObra(o));
 function empresaCampo(o) { const s = sessObra(o); return s && s.papel === 'empreiteira' ? s.empresa : 'Copel (fiscalização)' }
-function salvarSess() { lsSet('fisc.sess', S.sess.map(s => ({ pref: s.pref, div: s.div, url: s.url, chave: s.chave, papel: s.papel, empresa: s.empresa, responsavel: s.responsavel }))) }
+function salvarSess() { lsSet('fisc.sess', S.sess.map(s => ({ pref: s.pref, div: s.div, url: s.url, chave: s.chave, papel: s.papel, funcao: s.funcao, empresa: s.empresa, responsavel: s.responsavel }))) }
 function divisaoDoCodigo(c) {
   const pref = String(c || '').trim().toUpperCase().split('-')[0];
   const d = (CFG.divisoes || {})[pref];
@@ -146,6 +149,9 @@ async function sincronizar(op) {
       if (d.docs && JSON.stringify(d.docs) !== JSON.stringify(raw.docs)) { raw.docs = d.docs; mudou = true }
       if (d.pde && JSON.stringify(d.pde) !== JSON.stringify(raw.pde)) { raw.pde = d.pde; mudou = true }
       if (d.sim && JSON.stringify(d.sim) !== JSON.stringify(raw.sim)) { raw.sim = d.sim; mudou = true }
+      if (Array.isArray(d.pdes) && JSON.stringify(d.pdes) !== JSON.stringify(raw.pdes)) { raw.pdes = d.pdes; mudou = true }
+      if (Array.isArray(d.encarregados)) raw.encarregados = d.encarregados;
+      if (d.perfil && (d.perfil.funcao !== s.funcao || d.perfil.papel !== s.papel || d.perfil.responsavel !== s.responsavel)) { s.funcao = d.perfil.funcao; s.papel = d.perfil.papel; s.responsavel = d.perfil.responsavel; salvarSess(); garantirNome(); mudou = true }
       if (Array.isArray(d.fiscais)) raw.fiscais = d.fiscais;
       if (aplicar(raw, d)) mudou = true;
       IDB.set('cache:' + s.pref, raw).catch(() => { });
@@ -319,10 +325,11 @@ function vLogin(app, adicionando) {
     $('#entrar').disabled = true; msg.textContent = 'Verificando…';
     try {
       const j = await api({ url: d.url, chave: c }, 'login');
-      S.sess.push({ pref: d.pref, div: j.perfil.divisao || d.sigla, url: d.url, chave: c, papel: j.perfil.papel, empresa: j.perfil.empresa, responsavel: j.perfil.responsavel });
+      S.sess.push({ pref: d.pref, div: j.perfil.divisao || d.sigla, url: d.url, chave: c, papel: j.perfil.papel, funcao: j.perfil.funcao, empresa: j.perfil.empresa, responsavel: j.perfil.responsavel });
       salvarSess();
-      if (j.perfil.papel === 'empreiteira' && !S.nome) S.nome = '';
-      location.hash = (j.perfil.papel === 'empreiteira' || innerWidth < 760) ? 'campo' : 'painel';
+      garantirNome();
+      if (j.perfil.papel === 'empreiteira') lsSet('fisc.modo', 'campo');
+      location.hash = 'inicio';
       await sincronizar(); route();
     } catch (e) { $('#entrar').disabled = false; msg.textContent = e.rede ? 'Sem conexão com o servidor. Tente de novo com sinal.' : e.message }
   };
@@ -361,13 +368,14 @@ function route() {
   else if (h === 'assinatura') { S.mode = 'campo'; S.view = 'assinatura' }
   else if (h === 'pdes') { S.mode = soCampo ? 'campo' : (S.mode || 'gestao'); S.view = 'pdes' }
   else if (h === 'fluxo') { S.mode = soCampo ? 'campo' : (S.mode || 'gestao'); S.view = 'fluxo' }
+  else if (h === 'inicio' || h === '') { S.mode = soCampo ? 'campo' : lsGet('fisc.modo', innerWidth < 760 ? 'campo' : 'gestao'); S.view = 'inicio' }
   else if (m || soCampo) { S.mode = 'campo'; S.view = m && m[2] ? 'fobra' : 'flist'; S.obraId = m && m[2] ? m[2] : null }
   else {
     m = h.match(/^obra-(.+)$/); const mh = h.match(/^hist-(.+)$/);
     if (m) { S.mode = 'gestao'; S.view = 'obra'; S.obraId = m[1] }
     else if (mh) { S.mode = 'gestao'; S.view = 'hobra'; S.obraId = mh[1] }
     else if (['painel', 'obras', 'nova', 'historico'].includes(h)) { S.mode = 'gestao'; S.view = h }
-    else { S.mode = lsGet('fisc.modo', innerWidth < 760 ? 'campo' : 'gestao'); S.view = S.mode === 'campo' ? 'flist' : 'painel' }
+    else { S.mode = soCampo ? 'campo' : lsGet('fisc.modo', innerWidth < 760 ? 'campo' : 'gestao'); S.view = 'inicio' }
   }
   if (S.view !== 'hobra' && S.hist) { S.hist = null; reindex() }
   if (S.mode) lsSet('fisc.modo', S.mode);
@@ -377,11 +385,12 @@ function route() {
   $$('.modesw button').forEach(b => b.classList.toggle('on', b.dataset.m === S.mode));
   $('#nav').classList.toggle('hidden', S.mode === 'campo' || S.view === 'conta');
   $('#navnova').classList.toggle('hidden', !souGestor());
+  atualizarAbas();
   $$('#nav a').forEach(a => a.classList.toggle('on', a.dataset.v === S.view || (S.view === 'obra' && a.dataset.v === 'obras') || (S.view === 'hobra' && a.dataset.v === 'historico') || (S.view === 'doc' && a.dataset.v === 'docs')));
   closeLayer(); render();
 }
 function go(h) { if (location.hash === '#' + h) route(); else location.hash = h }
-$$('.modesw button').forEach(b => b.onclick = () => { lsSet('fisc.modo', b.dataset.m); go(b.dataset.m === 'campo' ? 'campo' : 'painel') });
+$$('.modesw button').forEach(b => b.onclick = () => { lsSet('fisc.modo', b.dataset.m); go('inicio') });
 addEventListener('hashchange', route);
 
 /* ================= render ================= */
@@ -395,7 +404,7 @@ function render(fromData) {
   if (S.view === 'conta') { VIEWER = null; vConta(app); return }
   if (!S.carregado) { app.innerHTML = `<div class="empty">Carregando…</div>`; return }
   VIEWER = null;
-  ({ painel: vPainel, obras: vObras, nova: vNova, obra: vObra, flist: vFlist, fobra: vFobra, historico: vHistorico, hobra: vHObra, docs: vDocs, doc: vDoc, assinar: vAssinar, assinatura: vAssinatura, fluxo: vFluxo, pdes: vPdes }[S.view] || vPainel)(app);
+  ({ painel: vPainel, obras: vObras, nova: vNova, obra: vObra, flist: vFlist, fobra: vFobra, historico: vHistorico, hobra: vHObra, docs: vDocs, doc: vDoc, assinar: vAssinar, assinatura: vAssinatura, fluxo: vFluxo, pdes: vPdes, inicio: vInicio }[S.view] || vInicio)(app);
 }
 function filtroDivHtml() {
   if (S.sess.length < 2) return '';
@@ -1187,10 +1196,17 @@ function vFobra(app) {
   const o = S.obras.find(x => x.id === S.obraId);
   if (!o) { app.innerHTML = `<div class="fcard empty" style="margin:16px">Obra não encontrada. <a href="#campo">Voltar</a></div>`; return }
   if (!S.nome) { pedirNome(() => render()); return }
+  const foco = S.focoPde && S.focoPde.obra === o.id ? S.focoPde : null;
   app.innerHTML = `<div class="fobra"><div class="fbar"><a href="#campo" class="btn sm ghost" style="text-decoration:none">←</a><div style="flex:1;min-width:0"><b>${esc(o.projeto)}</b><div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(o.descricao || '')} · ${esc(o.empreiteira || '')}</div></div>${o.pdf ? `<a class="btn sm ghost" href="${esc(driveVer(o.pdf.id))}" target="_blank" rel="noopener" style="text-decoration:none">PDF</a>` : ''}</div>
-   <div id="vw"></div><div class="fbot"><div style="flex:1" id="fsum"></div>${souCopel() ? '' : '<button class="btn sm ghost" id="pdebt">PDE/PLV</button>'}<button class="btn sm dk" id="novo">+ Poste não previsto</button></div></div>`;
+   ${foco ? `<div class="pdefoco"><b>${esc(foco.rot)}</b> · ${foco.postes.length} poste(s) destacado(s) na planta<button class="btn sm ghost" id="fcx">×</button></div>` : ''}
+   <div id="vw"></div><div class="fbot"><div style="flex:1" id="fsum"></div>${souCopel() || minhaFuncao() === 'encarregado' ? '' : '<button class="btn sm ghost" id="pdebt">PDE/PLV</button>'}<button class="btn sm dk" id="novo">+ Poste não previsto</button></div></div>`;
   FOLHA = 0;
-  VIEWER = montarPlanta(o, { onMarker: k => abrirPoste(o, k), onPlace: p => { VIEWER.setPlacing(false); abrirPoste(o, null, p) } });
+  if (foco) { const f0 = folhaDe(o, foco.postes[0]); if (f0 > 0) FOLHA = f0 }
+  const marcar = foco ? new Set(foco.postes) : null;
+  VIEWER = montarPlanta(o, { onMarker: k => abrirPoste(o, k), onPlace: p => { VIEWER.setPlacing(false); abrirPoste(o, null, p) },
+    decorar: marcar ? (L => L.map(m => marcar.has(m.key) ? Object.assign({}, m, { cls: (m.cls || '') + ' pdesel' }) : m)) : null });
+  $('#fcx') && ($('#fcx').onclick = () => { S.focoPde = null; render() });
+  if (S.abrirPde === o.id) { S.abrirPde = null; setTimeout(() => iniciarPde(o), 50) }
   $('#novo').onclick = () => { VIEWER.setPlacing(!VIEWER.placing, 'Toque na planta onde ficou o poste novo') };
   $('#pdebt') && ($('#pdebt').onclick = () => iniciarPde(o));
   updFbot();
@@ -1514,6 +1530,234 @@ function mostrarInstalar(el) {
   $('#instx').onclick = () => { lsSet('fisc.instOk', true); el.innerHTML = '' };
 }
 
+/* ================= tela inicial por papel ================= */
+/* Cada papel abre direto no que importa para ele no dia: sem filtro, sem procurar. */
+/** Usa o nome cadastrado na aba chaves quando a pessoa ainda não digitou o dela. */
+function garantirNome() { if (S.nome) return; const r = S.sess.map(s => s.responsavel).find(Boolean); if (r) { S.nome = r; lsSet('fisc.nome', r) } }
+const FUNC_NOME = { gestor: 'Gestor', supervisor_obra: 'Supervisor de obras', fiscal: 'Fiscal', encarregado: 'Encarregado', supervisor_emp: 'Supervisor', dono: 'Dono da empreiteira' };
+const funcaoDe = s => s.funcao || (s.papel === 'gestor' ? 'gestor' : s.papel === 'fiscal' ? 'fiscal' : 'supervisor_emp');
+const ORDEM_F = ['gestor', 'supervisor_obra', 'fiscal', 'dono', 'supervisor_emp', 'encarregado'];
+function minhaFuncao() { const fs = S.sess.map(funcaoDe); return ORDEM_F.find(f => fs.includes(f)) || 'supervisor_emp' }
+const todasPdes = () => S.sess.flatMap(s => ((S.raw[s.pref] || {}).pdes || []).map(d => Object.assign({ pref: s.pref }, d, { postes: Array.isArray(d.postes) ? d.postes : [], itens: d.itens || {} })));
+const ativasIni = () => obrasVisiveis().filter(o => o.status !== 'concluida' && o.status !== 'cancelada' && S.idx[o.id]);
+const normNome = v => String(v || '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ');
+const SEMANA = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+function rotData(d) { if (d === hoje()) return 'Hoje'; if (d === amanha()) return 'Amanhã'; const m = String(d || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${SEMANA[new Date(d + 'T12:00:00').getDay()]} ${m[3]}/${m[2]}` : '—' }
+function abrirObraIni(id) { go(S.mode === 'campo' ? 'campo-' + id : 'obra-' + id) }
+const usPosteIni = (o, key) => { const I = S.idx[o.id]; const sm = I && I.sim; if (sm && key.startsWith('P')) return Number(sm.postes[key.slice(1)]) || 0; return I && I.tot ? (o.us || 0) / I.tot : 0 };
+function pdeProg(d) {
+  const o = getObra(d.obra); if (!o || !S.idx[o.id]) return { o: null, feitos: 0, tot: d.postes.length };
+  const I = S.idx[o.id]; let f = 0; for (const k of d.postes) { const st = I.postes.get(k); if (st && st.last && EXEC.has(st.last.tipo)) f++ }
+  return { o, feitos: f, tot: d.postes.length };
+}
+/** Cartão de PDE. modo: 'enc' (encarregado: nº grande + postes e o que fazer), 'sup' (supervisor), 'cop' (Copel). */
+function pdeCardHtml(d, modo) {
+  const { o, feitos, tot } = pdeProg(d);
+  const aprov = d.status === 'aprovado';
+  const num = aprov && d.numeroPde ? `<div class="pdenum">${esc(d.tipo)} <span>${esc(d.numeroPde)}</span></div>` : `<div class="pdenum pend">${esc(d.tipo)} · ${aprov ? 'aprovado' : d.status === 'devolvido' ? 'devolvido' : 'aguardando nº do fiscal'}</div>`;
+  const quando = `${rotData(d.data)} · ${esc(d.horaIni || '')}–${esc(d.horaFim || '')}${d.operacional ? ` · operacional <b>${esc(d.operacional)}</b>` : ''}`;
+  const onde = `${esc(d.projeto || '')}${d.municipio ? ' · ' + esc(d.municipio) : ''}`;
+  const quem = modo === 'enc' ? '' : `<div class="small">👷 ${esc(d.encarregado || '—')}${d.telefone ? ` · <a href="tel:${esc(d.telefone)}">${esc(d.telefone)}</a>` : ''}${modo === 'cop' ? ` · ${esc(d.empreiteira || '')}` : ''}</div>`;
+  const prog = tot ? `<div class="pdeprog"><div class="bar" style="height:7px;flex:1"><i class="b-ok" style="width:${feitos / tot * 100}%"></i></div><span class="small">${feitos}/${tot} postes</span></div>` : '';
+  const lista = modo === 'enc' && o ? `<div class="pdepostes">${d.postes.map(k => { const st = S.idx[o.id].postes.get(k); const ok = st && st.last && EXEC.has(st.last.tipo); const it = d.itens[k] || []; return `<div class="pp${ok ? ' ok' : ''}"><b>${ok ? '✓ ' : ''}${esc(rotuloPoste(o, k))}</b>${it.length ? `<span>${esc(it.join(' · '))}</span>` : ''}</div>` }).join('')}${d.itens._complemento ? `<div class="pp"><b>Complemento</b><span>${esc(d.itens._complemento)}</span></div>` : ''}</div>` : '';
+  const dev = d.status === 'devolvido' && d.motivo ? `<div class="small" style="color:var(--bad);margin-top:4px"><b>Motivo:</b> ${esc(d.motivo)}</div>` : '';
+  const bts = [];
+  if (o && (modo === 'enc' || modo === 'sup')) bts.push(`<button class="btn sm ${modo === 'enc' ? 'pri' : 'ghost'}" data-pfoco="${esc(d.id)}">📍 ${modo === 'enc' ? 'Abrir postes no mapa' : 'Ver no mapa'}</button>`);
+  if (modo === 'sup' && d.status === 'devolvido') bts.push(`<button class="btn sm pri" data-pcor="${esc(d.id)}">Corrigir e reenviar</button>`);
+  if (modo === 'cop') bts.push(`<button class="btn sm ${d.status === 'solicitado' ? 'pri' : 'ghost'}" data-pdet="${esc(d.id)}">${d.status === 'solicitado' ? 'Analisar' : 'Detalhes'}</button>`);
+  return `<div class="fcard pdec ${modo}">${num}<div class="small" style="margin-top:2px">${quando}</div><div class="small muted">${onde}</div>${quem}${dev}${prog}${lista}${bts.length ? `<div class="pdebts">${bts.join('')}</div>` : ''}</div>`;
+}
+function ligarPdeCards(root, L) {
+  const ach = id => L.find(x => x.id === id);
+  $$('[data-pfoco]', root).forEach(b => b.onclick = () => { const d = ach(b.dataset.pfoco); S.focoPde = { obra: d.obra, postes: d.postes, rot: `${d.tipo} ${d.numeroPde || ''}`.trim() }; go('campo-' + d.obra) });
+  $$('[data-pcor]', root).forEach(b => b.onclick = () => { const d = ach(b.dataset.pcor); PDE_CORRIGIR = d; go('campo-' + d.obra) });
+  $$('[data-pdet]', root).forEach(b => b.onclick = () => detalhePde(ach(b.dataset.pdet)));
+  $$('[data-oi]', root).forEach(b => b.onclick = () => abrirObraIni(b.dataset.oi));
+  $$('[data-opde]', root).forEach(b => b.onclick = e => { e.stopPropagation(); S.abrirPde = b.dataset.opde; go('campo-' + b.dataset.opde) });
+  $$('[data-sc]', root).forEach(b => b.onclick = e => { e.preventDefault(); const t = $('#' + b.dataset.sc); t && t.scrollIntoView({ behavior: 'smooth', block: 'start' }) });
+}
+const secIni = (id, tit, corpo, cls = '') => corpo ? `<div class="hsec ${cls}" id="${id}"><div class="hsec-t">${tit}</div>${corpo}</div>` : '';
+const stripIni = L => `<div class="hstrip">${L.map(([n, l, cls, sc]) => `<a href="#" class="hc ${cls || ''}${n ? '' : ' zero'}" ${sc ? `data-sc="${sc}"` : ''}><b>${n}</b><span>${l}</span></a>`).join('')}</div>`;
+const vazioIni = t => `<div class="fcard empty">${t}</div>`;
+function obraLinhaIni(o, extra, acao) {
+  const I = S.idx[o.id]; const d = diasAte(o.prazo);
+  return `<div class="fcard cl hob" data-oi="${esc(o.id)}"><div class="t"><b>${esc(o.projeto)}</b>${extra || `<span class="pct" style="color:var(--or)">${fmt1(I.pct * 100)}%</span>`}</div>
+   <div class="s">${esc(o.descricao || '')}${o.municipio ? ' · ' + esc(o.municipio) : ''}${souCopel() ? ' · ' + esc(o.empreiteira || '') : ''}${o.prazo ? ` · prazo ${dBR(o.prazo)}${d != null && d < 0 && I.pct < 1 ? ' <b style="color:var(--bad)">(vencido)</b>' : ''}` : ''}</div>${acao || ''}</div>`;
+}
+function cabecalhoIni(f, subt) {
+  const s0 = S.sess[0] || {}; const nome = S.nome || s0.responsavel || '';
+  const quem = souCopel() ? 'Copel' : (s0.empresa || '');
+  const fila = S.fila.length ? `<div class="note" style="margin-top:10px">${S.fila.length} registro(s) aguardando sinal para enviar. <button class="btn sm" id="envf">Tentar agora</button></div>` : '';
+  if (S.mode === 'campo') return `<div class="fhead"><div class="who"><div><b>${esc(nome || FUNC_NOME[f])}</b><div class="small muted">${esc(FUNC_NOME[f])} · ${esc(quem)} · ${dBR(hoje())}</div></div><a class="btn sm ghost" href="#conta" style="text-decoration:none">Conta</a></div>${fila}<div id="inst"></div></div>`;
+  return `<div class="hhead"><div><h2 style="margin:0">${nome ? 'Olá, ' + esc(nome.split(' ')[0]) : FUNC_NOME[f]}</h2><div class="small muted">${esc(FUNC_NOME[f])} · ${esc(quem)} · ${rotData(hoje())} ${dBR(hoje())}${subt ? ' · ' + subt : ''}</div></div></div>${fila}`;
+}
+function vInicio(app) {
+  const f = minhaFuncao();
+  if ((f === 'encarregado' || f === 'supervisor_emp') && !S.nome && !(S.sess[0] || {}).responsavel) { app.innerHTML = ''; pedirNome(() => render()); return }
+  const fn = { encarregado: iniEncarregado, supervisor_emp: iniSupEmp, dono: iniDono, fiscal: iniFiscal, supervisor_obra: iniSupObra, gestor: iniGestor }[f] || iniSupEmp;
+  const body = fn();
+  app.innerHTML = `<div class="hini ${S.mode === 'campo' ? 'campo' : 'gestao'}">${cabecalhoIni(f, body.subt)}${body.html}</div>`;
+  ligarPdeCards(app, todasPdes());
+  $('#envf') && ($('#envf').onclick = () => enviarFila());
+  $('#inst') && mostrarInstalar($('#inst'));
+  body.depois && body.depois(app);
+}
+
+/* --- Encarregado: o PDE do dia, o nº para ligar na central e os postes que vai mexer --- */
+function iniEncarregado() {
+  const s0 = S.sess[0] || {}; const eu = [normNome(S.nome), normNome(s0.responsavel)].filter(Boolean);
+  const meu = d => { const a = normNome(d.encarregado); return a && eu.some(b => a === b || a.startsWith(b + ' ') || b.startsWith(a + ' ')) };
+  const L = todasPdes().filter(d => d.status !== 'cancelado');
+  const hojeL = L.filter(d => d.data === hoje()), amL = L.filter(d => d.data === amanha());
+  const meusHoje = hojeL.filter(meu), meusAm = amL.filter(meu);
+  const ordem = (a, b) => String(a.horaIni).localeCompare(String(b.horaIni));
+  let hj;
+  if (meusHoje.length) hj = meusHoje.sort(ordem).map(d => pdeCardHtml(d, 'enc')).join('');
+  else if (hojeL.length) hj = `<div class="small muted" style="margin:0 2px 8px">Nenhum PDE no seu nome hoje. Estes são os da empresa:</div>` + hojeL.sort(ordem).map(d => pdeCardHtml(d, 'enc')).join('');
+  else hj = vazioIni('Nenhum PDE programado para hoje.<br><a href="#campo">Ver as obras da empresa</a>');
+  const am = (meusAm.length ? meusAm : amL).sort(ordem).map(d => pdeCardHtml(d, 'sup')).join('');
+  const rep = ativasIni().filter(o => S.idx[o.id].rep).map(o => obraLinhaIni(o, `<span class="chip bad">${S.idx[o.id].rep} reprovado(s)</span>`)).join('');
+  return { html: `<div class="hcol">${secIni('h-hoje', `Hoje · ${dBR(hoje())}`, hj)}${secIni('h-am', `Amanhã${meusAm.length ? '' : ' · empresa'}`, am)}${secIni('h-rep', 'Refazer: reprovados pelo fiscal', rep, 'alerta')}
+    <a class="fcard" href="#campo" style="display:block;text-decoration:none;color:inherit;text-align:center"><b>📍 Todas as obras da empresa</b></a></div>` };
+}
+
+/* --- Supervisor da empreiteira: o que pedir de PDE, o que está pendente, hoje e amanhã das equipes --- */
+function iniSupEmp() {
+  const L = todasPdes().filter(d => d.status !== 'cancelado');
+  const ordem = (a, b) => String(a.data + a.horaIni).localeCompare(String(b.data + b.horaIni));
+  const dev = L.filter(d => d.status === 'devolvido').sort(ordem);
+  const hj = L.filter(d => d.data === hoje() && d.status === 'aprovado').sort(ordem);
+  const am = L.filter(d => d.data === amanha()).sort(ordem);
+  const sol = L.filter(d => d.status === 'solicitado' && d.data !== amanha()).sort(ordem);
+  // obras com postes por executar que não estão em nenhum PDE de hoje em diante
+  const cobertos = {}; L.filter(d => (d.status === 'aprovado' || d.status === 'solicitado') && String(d.data) >= hoje()).forEach(d => d.postes.forEach(k => { cobertos[d.obra + '|' + k] = 1 }));
+  const prog = ativasIni().map(o => { const I = S.idx[o.id]; let n = 0; for (const p of o.postes) { const k = 'P' + p.n, st = I.postes.get(k); if (!(st && st.last && EXEC.has(st.last.tipo)) && !cobertos[o.id + '|' + k]) n++ } return { o, n } }).filter(x => x.n).sort((a, b) => b.n - a.n);
+  const rep = ativasIni().filter(o => S.idx[o.id].rep);
+  const dp = docsPend();
+  const strip = stripIni([[dev.length, 'devolvidos', 'bad', 'h-dev'], [hj.length, 'hoje', '', 'h-hoje'], [am.length, 'amanhã', '', 'h-am'], [sol.length + am.filter(d => d.status === 'solicitado').length, 'com o fiscal', '', 'h-sol'], [prog.length, 'obras sem PDE', 'or', 'h-prog'], [dp, 'para assinar', dp ? 'or' : '', 'h-doc']]);
+  const html = strip + `<div class="hcol">
+    ${secIni('h-dev', 'Devolvidos pelo fiscal: corrigir', dev.map(d => pdeCardHtml(d, 'sup')).join(''), 'alerta')}
+    ${secIni('h-hoje', `Hoje · ${dBR(hoje())} · equipes em campo`, hj.length ? hj.map(d => pdeCardHtml(d, 'sup')).join('') : vazioIni('Nenhum PDE aprovado para hoje.'))}
+    ${secIni('h-am', `Amanhã · ${dBR(amanha())} · preparar`, am.length ? am.map(d => pdeCardHtml(d, 'sup')).join('') : vazioIni('Nada programado para amanhã.'))}
+    ${secIni('h-sol', 'Aguardando o fiscal', sol.map(d => pdeCardHtml(d, 'sup')).join(''))}
+    ${secIni('h-prog', 'Precisa programar PDE', prog.slice(0, 12).map(x => obraLinhaIni(x.o, `<span class="chip or">${x.n} poste(s) sem PDE</span>`, `<div style="margin-top:8px"><button class="btn sm pri" data-opde="${esc(x.o.id)}">Pedir PDE/PLV</button></div>`)).join(''))}
+    ${secIni('h-rep', 'Reprovados pelo fiscal: refazer', rep.map(o => obraLinhaIni(o, `<span class="chip bad">${S.idx[o.id].rep} reprovado(s)</span>`)).join(''), 'alerta')}
+    ${secIni('h-doc', 'Documentos', dp ? `<a class="fcard" href="#assinar" style="display:block;text-decoration:none;color:inherit;background:#fff7ed;border:1px solid #fed7aa"><b>📄 ${dp} documento(s) aguardando assinatura</b><div class="small muted">AES, BMD, FF e vistoria · toque para assinar</div></a>` : (!assTotal() ? `<a class="fcard" href="#assinatura" style="display:block;text-decoration:none;color:inherit;background:#eff6ff;border:1px solid #bfdbfe"><b>✍️ Cadastre a assinatura da empresa</b><div class="small muted">Uma vez só: desenha a assinatura e cria um PIN.</div></a>` : ''))}
+  </div>`;
+  return { html };
+}
+
+/* --- Dono da empreiteira: quanto tem para executar, quanto já foi medido, onde estão os riscos --- */
+function iniDono() {
+  const A = ativasIni(); let pt = 0, pe = 0, usP = 0, usE = 0, usM = 0, usMC = 0;
+  A.forEach(o => { const I = S.idx[o.id]; pt += I.tot; pe += I.exec; usP += I.usPrev; usE += I.usExec; usM += I.usMed; usMC += I.usMedCampo });
+  const aMedir = Math.max(0, usE - usMC);
+  const venc = A.filter(o => { const d = diasAte(o.prazo); return d != null && d < 0 && S.idx[o.id].pct < 1 });
+  const vencendo = A.filter(o => { const d = diasAte(o.prazo); return d != null && d >= 0 && d <= 15 && S.idx[o.id].pct < 1 });
+  const L = todasPdes().filter(d => d.status === 'aprovado' && String(d.data) >= hoje() && String(d.data) <= diaMais(6));
+  const dp = docsPend(), dev = todasPdes().filter(d => d.status === 'devolvido').length;
+  const kpis = `<div class="grid k4 hk">
+    <div class="kpi"><b>${A.length}</b><span>obras em andamento</span><small>${fmt(pe)} de ${fmt(pt)} postes executados (${pt ? fmt1(pe / pt * 100) : 0}%)</small></div>
+    <div class="kpi"><b>${fmt(usP)}</b><span>US previstas</span><small>carteira das obras em andamento</small></div>
+    <div class="kpi"><b>${fmt(usE)}</b><span>US executadas</span><small>${usP ? fmt1(usE / usP * 100) + '%' : '—'} do previsto</small></div>
+    <div class="kpi"><b>${fmt(usM)}</b><span>US medidas</span><small>${fmt(aMedir)} US executadas aguardando medição</small></div></div>`;
+  const atenc = [venc.length && `<div class="fcard" style="border-left:4px solid var(--bad)"><b>${venc.length} obra(s) com prazo vencido</b><div class="small muted">${venc.slice(0, 4).map(o => esc(o.projeto)).join(', ')}${venc.length > 4 ? '…' : ''}</div></div>`,
+    vencendo.length && `<div class="fcard" style="border-left:4px solid var(--or)"><b>${vencendo.length} obra(s) vencendo em até 15 dias</b><div class="small muted">${vencendo.slice(0, 4).map(o => `${esc(o.projeto)} (${dBR(o.prazo)})`).join(', ')}</div></div>`,
+    dp && `<a class="fcard" href="#assinar" style="display:block;text-decoration:none;color:inherit;border-left:4px solid var(--or)"><b>${dp} documento(s) para assinar</b><div class="small muted">toque para assinar</div></a>`,
+    dev && `<div class="fcard" style="border-left:4px solid var(--bad)"><b>${dev} PDE devolvido(s) pelo fiscal</b><div class="small muted">o supervisor precisa corrigir</div></div>`].filter(Boolean).join('');
+  const porDia = {}; L.forEach(d => { (porDia[d.data] = porDia[d.data] || []).push(d) });
+  const semana = Object.keys(porDia).sort().map(dt => `<div class="fcard"><div class="t"><b>${rotData(dt)} ${dBR(dt)}</b><span class="small">${porDia[dt].length} PDE · ${porDia[dt].reduce((n, d) => n + d.postes.length, 0)} postes</span></div><div class="small muted">${porDia[dt].map(d => `${esc(d.encarregado || '—')} (${esc(d.projeto)})`).join(' · ')}</div></div>`).join('');
+  const obras = A.slice().sort((a, b) => (diasAte(a.prazo) ?? 999) - (diasAte(b.prazo) ?? 999)).map(o => { const I = S.idx[o.id]; return obraLinhaIni(o, `<span class="small"><b>${fmt(I.usMed)}</b> / ${fmt(I.usPrev)} US</span>`, `<div class="bar" style="height:8px;margin-top:6px"><i class="b-ok" style="width:${I.pct * 100}%"></i></div><div class="small muted" style="margin-top:4px">${I.exec}/${I.tot} postes · ${I.fis} medidos</div>`) }).join('');
+  return { html: kpis + `<div class="hcol">${secIni('h-at', 'Atenção', atenc, 'alerta')}${secIni('h-sem', 'Próximos 7 dias em campo', semana || vazioIni('Nenhum PDE aprovado para os próximos dias.'))}${secIni('h-ob', 'Obras', obras || vazioIni('Nenhuma obra em andamento.'))}</div>` };
+}
+
+/* --- Fiscal: o que medir, o que analisar, o que encerrar, onde as equipes estão hoje --- */
+function iniFiscal() {
+  const meus = S.sess.filter(s => s.papel !== 'empreiteira').map(s => normNome(s.responsavel)).filter(Boolean);
+  const souEu = d => meus.includes(normNome(d.fiscal));
+  const P = todasPdes();
+  const anal = P.filter(d => d.status === 'solicitado').sort((a, b) => (souEu(b) - souEu(a)) || String(a.data + a.horaIni).localeCompare(String(b.data + b.horaIni)));
+  const A = ativasIni();
+  const afis = A.map(o => ({ o, n: aFiscalizar(o).length })).filter(x => x.n).sort((a, b) => b.n - a.n);
+  const enc = A.filter(o => S.idx[o.id].etapa === 'medida');
+  const campo = P.filter(d => d.status === 'aprovado' && d.data === hoje()).sort((a, b) => String(a.horaIni).localeCompare(String(b.horaIni)));
+  const npost = afis.reduce((n, x) => n + x.n, 0);
+  const strip = stripIni([[npost, 'postes a fiscalizar', npost ? 'or' : '', 'h-fis'], [anal.length, 'PDE para analisar', anal.length ? 'or' : '', 'h-an'], [enc.length, 'prontas p/ encerrar', enc.length ? 'ok' : '', 'h-enc'], [campo.length, 'equipes em campo hoje', '', 'h-cam']]);
+  const html = strip + `<div class="hgrid"><div class="hcol">
+    ${secIni('h-an', 'PDE/PLV para analisar', anal.length ? anal.map(d => pdeCardHtml(d, 'cop')).join('') : vazioIni('Nenhum pedido aguardando análise ✓'))}
+    ${secIni('h-fis', 'Postes executados aguardando fiscalização', afis.length ? afis.map(x => obraLinhaIni(x.o, `<span class="chip or">${x.n} a fiscalizar</span>`)).join('') : vazioIni('Nada aguardando fiscalização ✓'))}
+   </div><div class="hcol">
+    ${secIni('h-enc', 'Todos os postes aprovados: enviar BMD final + FF + vistoria', enc.map(o => obraLinhaIni(o, '<span class="chip ok">pronta p/ encerrar</span>')).join(''))}
+    ${secIni('h-cam', `Em campo hoje · ${dBR(hoje())}`, campo.length ? campo.map(d => pdeCardHtml(d, 'cop')).join('') : vazioIni('Nenhum PDE aprovado para hoje.'))}
+   </div></div>`;
+  return { html };
+}
+
+/* --- Supervisor de obras (Copel): empenhar, destravar, prazos e o que acontece em campo --- */
+function iniSupObra() {
+  const A = ativasIni();
+  const aes = S.sess.filter(s => s.papel === 'gestor').reduce((n, s) => n + aesPendentes(s.pref).length, 0);
+  const venc = A.filter(o => { const d = diasAte(o.prazo); return d != null && d < 0 && S.idx[o.id].pct < 1 }).sort((a, b) => diasAte(a.prazo) - diasAte(b.prazo));
+  const vencendo = A.filter(o => { const d = diasAte(o.prazo); return d != null && d >= 0 && d <= 15 && S.idx[o.id].pct < 1 }).sort((a, b) => diasAte(a.prazo) - diasAte(b.prazo));
+  const semIni = A.filter(o => S.idx[o.id].etapa === 'empenhada' && o.empenhoEm && diasAte(String(o.empenhoEm).slice(0, 10)) <= -7);
+  const P = todasPdes();
+  const campo = P.filter(d => d.status === 'aprovado' && d.data === hoje());
+  const anal = P.filter(d => d.status === 'solicitado').length;
+  const afis = A.reduce((n, o) => n + aFiscalizar(o).length, 0);
+  const et = { empenhada: 0, execucao: 0, executada: 0, medida: 0 }; A.forEach(o => et[S.idx[o.id].etapa]++);
+  const strip = stripIni([[aes, 'AES a empenhar', aes ? 'or' : '', 'h-aes'], [venc.length, 'prazo vencido', venc.length ? 'bad' : '', 'h-pz'], [vencendo.length, 'vencendo ≤15 dias', vencendo.length ? 'or' : '', 'h-pz'], [semIni.length, 'sem início +7 dias', semIni.length ? 'or' : '', 'h-si'], [campo.length, 'PDE hoje', '', 'h-cam'], [anal, 'PDE com o fiscal', '', 'h-cam']]);
+  const pipe = `<div class="fcard"><div class="pipe4">${[['Empenhadas', et.empenhada], ['Em execução', et.execucao], ['Executadas', et.executada], ['Medidas', et.medida]].map(([l, n]) => `<div><b>${n}</b><span>${l}</span></div>`).join('')}</div><div class="small muted" style="margin-top:6px">${afis} poste(s) executados aguardando o fiscal · ${docsPend()} documento(s) aguardando assinatura da empreiteira · <a href="#painel">painel completo</a></div></div>`;
+  const pz = venc.map(o => obraLinhaIni(o, `<span class="chip bad">${-diasAte(o.prazo)} dia(s) vencido</span>`)).concat(vencendo.map(o => obraLinhaIni(o, `<span class="chip or">vence em ${diasAte(o.prazo)} dia(s)</span>`))).join('');
+  const html = strip + `<div class="hgrid"><div class="hcol">
+    ${secIni('h-aes', 'AES aguardando empenho', aes ? `<a class="fcard" href="#nova" style="display:block;text-decoration:none;color:inherit;background:#fff7ed;border:1px solid #fed7aa"><b>📥 ${aes} projeto(s) da AES ainda sem PDF</b><div class="small muted">Suba os PDFs dos projetos para empenhar</div></a>` : '')}
+    ${secIni('h-pz', 'Prazos', pz || vazioIni('Nenhuma obra vencida ou vencendo nos próximos 15 dias ✓'))}
+    ${secIni('h-si', 'Empenhadas há mais de 7 dias sem nenhum poste executado', semIni.map(o => obraLinhaIni(o, `<span class="chip">empenhada ${dBR(String(o.empenhoEm).slice(0, 10))}</span>`)).join(''))}
+   </div><div class="hcol">
+    ${secIni('h-et', 'Carteira', pipe)}
+    ${secIni('h-cam', `Em campo hoje · ${dBR(hoje())}`, campo.length ? campo.map(d => pdeCardHtml(d, 'cop')).join('') : vazioIni('Nenhum PDE aprovado para hoje.'))}
+   </div></div>`;
+  return { html };
+}
+
+/* --- Gestor (macro): o mês — executado, medido, a medir, prazos — e o painel completo embaixo --- */
+function iniGestor() {
+  const mes = hoje().slice(0, 7); const A = ativasIni();
+  let pMes = 0, usMedMes = 0, usPrev = 0, aMedir = 0, mob = 0;
+  for (const o of S.obras) {
+    const I = S.idx[o.id]; if (!I) continue;
+    for (const [k, st] of I.postes) {
+      if (st.first && String(st.first).slice(0, 7) === mes) pMes++;
+      if (fiscPoste(I, k) === 'aprovado' && String(st.fisc.em || '').slice(0, 7) === mes) usMedMes += usPosteIni(o, k);
+    }
+  }
+  A.forEach(o => { const I = S.idx[o.id]; usPrev += I.usPrev; aMedir += Math.max(0, I.usExec - I.usMedCampo); if (!I.encerr) mob += I.usMob });
+  // programados: postes ainda não executados que estão em PDE aprovado ou pedido daqui até o fim do mês
+  const prog = new Set(); todasPdes().filter(d => (d.status === 'aprovado' || d.status === 'solicitado') && String(d.data).slice(0, 7) === mes && String(d.data) >= hoje()).forEach(d => { const o = getObra(d.obra); const I = o && S.idx[o.id]; d.postes.forEach(k => { const st = I && I.postes.get(k); if (!(st && st.last && EXEC.has(st.last.tipo))) prog.add(d.obra + '|' + k) }) });
+  const fechaMes = A.filter(o => String(o.prazo || '').slice(0, 7) === mes && S.idx[o.id].pct < 1);
+  const venc = A.filter(o => { const d = diasAte(o.prazo); return d != null && d < 0 && S.idx[o.id].pct < 1 });
+  const nomeMes = new Date(hoje() + 'T12:00:00').toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  const html = `<div class="hmes"><div class="hsec-t">Este mês · ${nomeMes}</div><div class="grid k4 hk">
+    <div class="kpi"><b>${fmt(pMes)}</b><span>postes executados no mês</span><small>${prog.size ? `+ ${prog.size} programado(s) em PDE até o fim do mês` : 'data de execução informada em campo'}</small></div>
+    <div class="kpi"><b>${fmt(usMedMes)}</b><span>US medidas no mês</span><small>postes aprovados pelo fiscal</small></div>
+    <div class="kpi"><b>${fmt(aMedir)}</b><span>US a medir</span><small>executadas, aguardando fiscal${mob ? ` · + ${fmt(mob)} de mobilização` : ''}</small></div>
+    <div class="kpi"><b>${fechaMes.length}</b><span>obras com prazo neste mês</span><small>${venc.length ? `<b style="color:#fca5a5">${venc.length} já vencida(s)</b> · ` : ''}${fmt(usPrev)} US em carteira</small></div></div></div><div id="painelIni"></div>`;
+  return { html, depois: app => { const el = $('#painelIni', app); if (el) vPainel(el) } };
+}
+
+/* --- barra de abas do campo (celular) --- */
+function atualizarAbas() {
+  const tb = $('#tabbar'); if (!tb) return;
+  const mostra = S.mode === 'campo' && S.sess.length && !['login', 'fobra'].includes(S.view);
+  tb.classList.toggle('hidden', !mostra); document.body.classList.toggle('tabs', !!mostra);
+  if (!mostra) return;
+  const f = minhaFuncao(), emp = !souCopel();
+  const it = [['inicio', '🏠', 'Início'], ['campo', '📍', 'Obras']];
+  if (f !== 'encarregado') it.push(['pdes', '📋', 'PDE/PLV']);
+  if (emp && f !== 'encarregado') it.push(['assinar', '✍️', 'Assinar']);
+  const ativo = S.view === 'flist' ? 'campo' : S.view;
+  tb.innerHTML = it.map(([h, ic, l]) => `<a href="#${h}" class="${ativo === h ? 'on' : ''}"><span>${ic}</span>${l}</a>`).join('');
+}
+
 /* ================= início ================= */
 /* Aviso de ambiente: o pacote de homologação define CFG.ambiente='homologacao'
    para pintar o cabeçalho e marcar o título, evitando lançar dado achando que é produção. */
@@ -1530,7 +1774,7 @@ function aplicarAmbiente() {
 }
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
 (async () => {
-  aplicarAmbiente();
+  aplicarAmbiente(); garantirNome();
   // mostra o que já está no aparelho, depois atualiza
   for (const s of S.sess) { const raw = await carregarRaw(s.pref); if (raw.desde || Object.keys(raw.obras).length) S.carregado = true }
   montar(); await carregarFila(); reindex();
@@ -1954,7 +2198,6 @@ const pdeChip = d => `<span class="chip ${PDE_ST[d.status] ? PDE_ST[d.status][0]
 const pdeResumo = () => S.sess.reduce((a, s) => { const r = (S.raw[s.pref] || {}).pde || {}; a.sol += r.solicitados || 0; a.dev += r.devolvidos || 0; a.tot += r.total || 0; return a }, { sol: 0, dev: 0, tot: 0 });
 const fiscaisDe = pref => (S.raw[pref] || {}).fiscais || [];
 const HORAS = Array.from({ length: 96 }, (_, i) => `${String(Math.floor(i / 4)).padStart(2, '0')}:${String(i % 4 * 15).padStart(2, '0')}`);
-const amanha = () => { const d = new Date(Date.now() + 864e5); return d.toISOString().slice(0, 10) };
 async function listarPdes(filtro) {
   const L = []; let erro = '';
   for (const s of S.sess) { try { ((await api(s, 'pdes', filtro || {})).pdes || []).forEach(d => L.push(Object.assign(d, { pref: s.pref }))) } catch (e) { erro = e.rede ? 'Sem conexão.' : e.message } }
@@ -2022,7 +2265,7 @@ function formPde(o, keys, base) {
     <div id="pits">${keys.map(k => `<div class="pit" data-k="${esc(k)}"><b>${esc(rotuloPoste(o, k))}</b> <span class="small muted">· folha ${folhaDe(o, k) + 1}</span>
       ${G[k].map((g, j) => g.fixo ? `<div class="small" style="padding:4px 0">${esc(g.rot)}</div>` : `<label><input type="checkbox" data-g="${j}" ${marcado(k, g) ? 'checked' : ''}><span>${esc(g.rot)}</span></label>`).join('')}</div>`).join('')}</div>
     <label class="f">Complemento</label><textarea class="i" id="pcomp" rows="3" placeholder="Pontos de aterramento, serviços com linha viva, desligamentos etc.">${esc(comp0)}</textarea>
-    <div class="row2"><div><label class="f">Encarregado</label><input class="i" id="penc" value="${esc(v.encarregado)}"></div><div><label class="f">Telefone do encarregado</label><input class="i" id="ptel" type="tel" inputmode="numeric" value="${esc(v.telefone)}"></div></div>
+    <div class="row2"><div><label class="f">Encarregado</label><input class="i" id="penc" list="lenc" value="${esc(v.encarregado)}" autocomplete="off"><datalist id="lenc">${((S.raw[o.pref] || {}).encarregados || []).map(n => `<option value="${esc(n)}">`).join('')}</datalist></div><div><label class="f">Telefone do encarregado</label><input class="i" id="ptel" type="tel" inputmode="numeric" value="${esc(v.telefone)}"></div></div>
     <label class="f">Observações</label><input class="i" id="pobs" value="${esc(v.obs)}">
     <label style="display:flex;gap:10px;align-items:flex-start;margin-top:14px;font-size:13.5px"><input type="checkbox" id="ptermo" style="width:22px;height:22px;flex:none;margin-top:1px"><span>Declaro que todas as informações preenchidas acima são fiéis ao projeto que me foi entregue.</span></label>
     <button class="btn pri" id="penv" style="width:100%;margin-top:14px;padding:13px">${base ? 'Reenviar ao fiscal' : 'Enviar ao fiscal'}</button></div></div>`);

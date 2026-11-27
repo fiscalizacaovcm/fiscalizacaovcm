@@ -7,7 +7,7 @@
  * Para atualizar o código depois: Implantar > Gerenciar implantações > ✏️ > Versão: Nova versão > Implantar.
  * NUNCA use "Nova implantação" de novo, porque o endereço muda e o app perde a conexão.
  */
-const VERSAO_SERVIDOR = '1.16';
+const VERSAO_SERVIDOR = '1.17';
 
 const COLS_OBRAS = ['id', 'projeto', 'ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us',
   'empenhoEm', 'prazo', 'status', 'lat', 'lon', 'locOrigem', 'plantaId', 'plantaW', 'plantaH', 'pdfId', 'pdfNome',
@@ -41,14 +41,29 @@ const ABAS = {
 };
 const COL_DATA = ['empenhoEm', 'prazo', 'dataExec'];
 const COL_NUM = ['us', 'lat', 'lon', 'plantaW', 'plantaH', 'precisao', 'x', 'y', 'folha', 'custo'];
-const PAPEIS = ['gestor', 'fiscal', 'empreiteira'];
-/** Papel tolerante a digitação: "Empreiteria", "empreiteira " etc. viram "empreiteira". */
-function normPapel(v) {
-  const t = String(v || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+/* Papéis da aba "chaves" (lista suspensa). Cada função cai num grupo de permissão:
+ *  Copel:       gestor (macro) · supervisor de obras (empenha, gerencia)  -> grupo "gestor"
+ *               fiscal (mede)                                              -> grupo "fiscal"
+ *  Empreiteira: encarregado (campo) · supervisor (PDE, equipes) · dono     -> grupo "empreiteira"
+ *  O valor antigo "empreiteira" continua valendo como supervisor da empreiteira. */
+const PAPEIS = ['gestor', 'supervisor de obras', 'fiscal', 'encarregado', 'supervisor empreiteira', 'dono empreiteira'];
+const GRUPO_FUNCAO = { gestor: 'gestor', supervisor_obra: 'gestor', fiscal: 'fiscal', encarregado: 'empreiteira', supervisor_emp: 'empreiteira', dono: 'empreiteira' };
+/** Função tolerante a digitação. "supervisor" sozinho: com empresa preenchida é da empreiteira, sem empresa é da Copel. */
+function normFuncao(v, empresa) {
+  const t = String(v || '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
   if (t.indexOf('gest') === 0) return 'gestor';
   if (t.indexOf('fisc') === 0) return 'fiscal';
-  return 'empreiteira';
+  if (t.indexOf('encarreg') >= 0) return 'encarregado';
+  if (t.indexOf('dono') >= 0 || t.indexOf('propriet') >= 0 || t.indexOf('diretor') >= 0) return 'dono';
+  if (t.indexOf('supervis') >= 0) {
+    if (t.indexOf('obra') >= 0 || t.indexOf('copel') >= 0) return 'supervisor_obra';
+    if (t.indexOf('empreit') >= 0) return 'supervisor_emp';
+    return String(empresa || '').trim() ? 'supervisor_emp' : 'supervisor_obra';
+  }
+  return 'supervisor_emp';   // "empreiteira" (valor antigo) e qualquer outro texto
 }
+/** Grupo de permissão (gestor / fiscal / empreiteira) — é o que as regras do servidor checam. */
+function normPapel(v, empresa) { return GRUPO_FUNCAO[normFuncao(v, empresa)]; }
 const EDITAVEIS_OBRA = ['ose', 'descricao', 'cliente', 'local', 'municipio', 'projetista', 'empreiteira', 'aes', 'us', 'empenhoEm',
   'prazo', 'lat', 'lon', 'locOrigem', 'postes', 'pep'];
 const TIPOS_EXEC = ['conforme', 'alterado', 'nao', 'novo'];
@@ -146,7 +161,7 @@ function gerarCodigos() {
       do { c = pref + '-' + aleatorio(4) + '-' + aleatorio(4); } while (usados[c]);
       usados[c] = 1;
       sh.getRange(i + 2, 1).setValue(c);
-      if (!r[1]) sh.getRange(i + 2, 2).setValue('empreiteira');
+      if (!r[1]) sh.getRange(i + 2, 2).setValue('supervisor empreiteira');
       if (!r[4]) sh.getRange(i + 2, 5).setValue('SIM');
       sh.getRange(i + 2, 6).setValue(agoraIso());
       n++;
@@ -247,6 +262,9 @@ function dados(p, req) {
   if (p.papel !== 'empreiteira') out.empreiteiras = listaEmpreiteiras();
   out.docs = resumoDocs(p);
   out.pde = resumoPde(p);
+  out.pdes = pdesRecentes(p);
+  out.perfil = publico(p);
+  if (p.papel === 'empreiteira') out.encarregados = listaEncarregados(p.empresa);
   out.sim = lerSimMap();
   out.fiscais = listaFiscais();
   if (p.papel === 'gestor') out.aes = ler('aes').filter(function (a) { return !a.obra; });
@@ -272,7 +290,7 @@ function listaEmpreiteiras() {
   const vistos = {};
   sh.getRange(2, 1, sh.getLastRow() - 1, 5).getValues().forEach(function (r) {
     const ativa = String(r[4]).toUpperCase();
-    if (normPapel(r[1]) === 'empreiteira' && r[2] && ativa !== 'NÃO' && ativa !== 'NAO') vistos[String(r[2]).trim()] = 1;
+    if (normPapel(r[1], r[2]) === 'empreiteira' && r[2] && ativa !== 'NÃO' && ativa !== 'NAO') vistos[String(r[2]).trim()] = 1;
   });
   return Object.keys(vistos).sort(function (x, y) { return x.localeCompare(y, 'pt-BR'); });
 }
@@ -726,12 +744,12 @@ function perfil(chave) {
   if (!f) return null;
   const r = sh.getRange(f.getRow(), 1, 1, 5).getValues()[0];
   if (String(r[4]).toUpperCase() === 'NÃO' || String(r[4]).toUpperCase() === 'NAO') return null;
-  const papel = normPapel(r[1]);
-  return { chave: r[0], papel: papel, empresa: String(r[2] || ''), responsavel: String(r[3] || ''), linha: f.getRow() };
+  const funcao = normFuncao(r[1], r[2]);
+  return { chave: r[0], papel: GRUPO_FUNCAO[funcao], funcao: funcao, empresa: String(r[2] || ''), responsavel: String(r[3] || ''), linha: f.getRow() };
 }
 
 function publico(p) {
-  return { papel: p.papel, empresa: p.empresa, responsavel: p.responsavel, divisao: lerConfig().divisao };
+  return { papel: p.papel, funcao: p.funcao || normFuncao(p.papel, p.empresa), empresa: p.empresa, responsavel: p.responsavel, divisao: lerConfig().divisao };
 }
 
 function marcarUso(p) {
@@ -857,6 +875,7 @@ function docPdf(p, req) {
 }
 function assinarDocumento(p, req) {
   if (p.papel !== 'empreiteira') return { ok: false, erro: 'quem assina é a empreiteira' };
+  if (p.funcao === 'encarregado') return { ok: false, erro: 'a assinatura é feita pelo supervisor ou pelo dono da empreiteira' };
   const d = docsVisiveis(p).filter(function (x) { return x.id === req.id; })[0];
   if (!d) return { ok: false, erro: 'documento não encontrado' };
   if (d.status === 'assinado') return { ok: true, repetido: true, documento: docPublico(d) };
@@ -902,6 +921,7 @@ function assinantes(p, req) {
 }
 function cadastrarAssinante(p, req) {
   if (p.papel !== 'empreiteira') return { ok: false, erro: 'o cadastro de assinatura é feito pela empreiteira' };
+  if (p.funcao === 'encarregado') return { ok: false, erro: 'o cadastro de assinatura é feito pelo supervisor ou pelo dono da empreiteira' };
   const nome = String(req.nome || '').trim(), pin = String(req.pin || '');
   if (nome.length < 5) return { ok: false, erro: 'informe o nome completo' };
   if (!/^\d{6}$/.test(pin)) return { ok: false, erro: 'o PIN deve ter 6 números' };
@@ -1029,11 +1049,28 @@ function armazenamento(p) {
 }
 
 /* ============================ PDE / PLV (pedido da empreiteira → análise do fiscal) ============================ */
+/** Encarregados cadastrados (aba chaves) de uma empreiteira — para escolher no pedido de PDE. */
+function listaEncarregados(empresa) {
+  const vistos = {}; const L = [];
+  ler('chaves').forEach(function (r) {
+    const nome = String(r.responsavel || '').trim(); const at = String(r.ativa).toUpperCase();
+    if (normFuncao(r.papel, r.empresa) === 'encarregado' && norm(r.empresa) === norm(empresa) && at !== 'NÃO' && at !== 'NAO' && nome && !vistos[nome]) { vistos[nome] = 1; L.push(nome); }
+  });
+  return L.sort();
+}
+/** PDEs que interessam às telas iniciais: pendentes de análise/correção e os de hoje em diante (com folga de 3 dias). */
+function pdesRecentes(p) {
+  const corte = new Date(Date.now() - 3 * 864e5 - 3 * 36e5).toISOString().slice(0, 10);
+  return pdesVisiveis(p).filter(function (d) {
+    if (d.status === 'cancelado') return false;
+    return d.status === 'solicitado' || d.status === 'devolvido' || String(d.data || '') >= corte;
+  }).map(pdePublico);
+}
 function listaFiscais() {
   const vistos = {}; const L = [];
   ler('chaves').forEach(function (r) {
     const nome = String(r.responsavel || '').trim();
-    if (normPapel(r.papel) === 'fiscal' && String(r.ativa).toUpperCase() !== 'NÃO' && String(r.ativa).toUpperCase() !== 'NAO' && nome && !vistos[nome]) { vistos[nome] = 1; L.push(nome); }
+    if (normPapel(r.papel, r.empresa) === 'fiscal' && String(r.ativa).toUpperCase() !== 'NÃO' && String(r.ativa).toUpperCase() !== 'NAO' && nome && !vistos[nome]) { vistos[nome] = 1; L.push(nome); }
   });
   return L.sort();
 }
