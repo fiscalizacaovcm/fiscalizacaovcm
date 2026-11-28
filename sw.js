@@ -1,7 +1,9 @@
 /* Service worker · Fiscalização de Obras
  * Ao publicar uma versão nova do app, troque o número abaixo para os celulares atualizarem. */
-const VERSAO = 'v36';
-const APP = 'fisc-app-' + VERSAO;
+const VERSAO = 'v37';
+// a homologação (pasta /homolog/) tem o próprio cache, separado do da produção
+const PREFIXO = 'fisc-app-' + (/\/homolog\/$/.test(self.registration.scope) ? 'homolog-' : '');
+const APP = PREFIXO + VERSAO;
 const IMGS = 'fisc-imgs';
 const ARQUIVOS = ['./', 'index.html', 'app.js', 'config.js', 'prmap.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 
@@ -9,7 +11,7 @@ self.addEventListener('install', e => {
   e.waitUntil(caches.open(APP).then(c => c.addAll(ARQUIVOS)).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k.startsWith('fisc-app-') && k !== APP).map(k => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== APP && (PREFIXO === 'fisc-app-' ? /^fisc-app-v\d+$/.test(k) : k.startsWith(PREFIXO))).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
 self.addEventListener('fetch', e => {
   const req = e.request;

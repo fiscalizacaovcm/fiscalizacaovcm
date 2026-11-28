@@ -1,7 +1,9 @@
 /* Fiscalização de Obras · app (campo + gestão) */
 'use strict';
 const CFG = window.FISC_CONFIG || { divisoes: {} };
-const VERSAO_APP = '1.18.2';
+/* homologação e produção podem rodar no mesmo endereço (github.io): cada ambiente guarda os dados separados */
+const NS = CFG.ambiente ? CFG.ambiente + ':' : '';
+const VERSAO_APP = '1.18.3';
 /* base do pdf.js: cdnjs por padrão (GitHub Pages); o pacote local define CFG.pdfjsBase
    para servir tudo do disco e não depender de liberar a CDN na rede. */
 const PDFJS_BASE = CFG.pdfjsBase || 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
@@ -22,8 +24,8 @@ const S = {
   sess: lsGet('fisc.sess', []), obras: [], regs: [], emps: {}, raw: {}, hist: null, histLista: null, ultimaTentativa: 0, fila: [], idx: {}, carregado: false, carregando: false, ultimaSync: null,
   mode: null, view: 'painel', obraId: null, nome: lsGet('fisc.nome', ''), verTodas: lsGet('fisc.todas', false), mapZoom: 'obras', divFiltro: ''
 };
-function lsGet(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v) } catch (e) { return d } }
-function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)) } catch (e) { } }
+function lsGet(k, d) { try { const v = localStorage.getItem(NS + k); return v == null ? d : JSON.parse(v) } catch (e) { return d } }
+function lsSet(k, v) { try { localStorage.setItem(NS + k, JSON.stringify(v)) } catch (e) { } }
 const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmt = n => (n == null || isNaN(n)) ? '—' : Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 0 });
@@ -71,7 +73,7 @@ function divisaoDoCodigo(c) {
 /* ================= armazenamento local (IndexedDB) ================= */
 const IDB = {
   db: null,
-  open() { if (this.db) return Promise.resolve(this.db); return new Promise((ok, ko) => { const r = indexedDB.open('fiscalizacao', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => { this.db = r.result; ok(r.result) }; r.onerror = () => ko(r.error) }) },
+  open() { if (this.db) return Promise.resolve(this.db); return new Promise((ok, ko) => { const r = indexedDB.open('fiscalizacao' + (CFG.ambiente ? '-' + CFG.ambiente : ''), 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => { this.db = r.result; ok(r.result) }; r.onerror = () => ko(r.error) }) },
   async tx(mode, fn) { const db = await this.open(); return new Promise((ok, ko) => { const t = db.transaction('kv', mode); const st = t.objectStore('kv'); const q = fn(st); t.oncomplete = () => ok(q && q.result); t.onerror = () => ko(t.error) }) },
   get(k) { return this.tx('readonly', s => s.get(k)) },
   set(k, v) { return this.tx('readwrite', s => s.put(v, k)) },
@@ -1273,7 +1275,7 @@ function abrirPoste(o, key, novoPos, rasc) {
   // rascunho: se o Android fechar o app enquanto a câmera do celular está aberta, o registro volta preenchido
   const folhaNovo = rasc && rasc.folha != null ? rasc.folha : FOLHA;
   const guardar = () => lsSet('fisc.rascunho', { obra: o.id, key: key || null, novoPos: novoPos || null, folha: folhaNovo, tipo: F.tipo, alt: F.alt, obs: F.obs, dataExec: F.dataExec, t: Date.now() });
-  const descartar = () => { try { localStorage.removeItem('fisc.rascunho') } catch (e) { } };
+  const descartar = () => { try { localStorage.removeItem(NS + 'fisc.rascunho') } catch (e) { } };
   const gpsP = pegarGps().then(g => { F.gps = g; const el = $('#fgps2'); if (el) el.textContent = g ? `GPS do celular: ${g.lat.toFixed(5)}, ${g.lon.toFixed(5)} (±${g.precisao} m)` : 'GPS do celular indisponível. Ative a localização para este app.' });
   const titulo = novo ? 'Poste não previsto' : rotuloPoste(o, key);
   openLayer(`<div class="ov" id="shov" style="align-items:flex-end;padding:0"><div class="sheet" style="position:relative;width:100%"><div class="grab"></div>
